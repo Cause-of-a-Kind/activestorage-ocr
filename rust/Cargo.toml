@@ -1,0 +1,63 @@
+[package]
+name = "activestorage-ocr-server"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance OCR server for ActiveStorage-OCR gem"
+license = "MIT"
+repository = "https://github.com/yourorg/activestorage-ocr"
+
+[[bin]]
+name = "activestorage-ocr-server"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["cors", "limit", "trace"] }
+
+# OCR - pure Rust, no system dependencies!
+ocrs = "0.9"
+rten = "0.13"  # Must match ocrs's rten version
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# File handling
+tempfile = "3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Async utilities
+futures = "0.3"
+
+# Image processing
+image = "0.25"
+
+# PDF support (pure Rust)
+pdf-extract = "0.10"
+lopdf = { version = "0.38", features = ["image"] }
+
+# Model downloading
+ureq = "3"
+dirs = "6"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["multipart", "json"] }
+tokio-test = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
