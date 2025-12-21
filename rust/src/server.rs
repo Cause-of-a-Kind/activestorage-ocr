@@ -101,12 +101,10 @@ async fn handle_ocr(
                 })?);
             }
             "languages" => {
-                languages = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| OcrError::InvalidRequest(format!("Invalid languages: {}", e)))?,
-                );
+                languages =
+                    Some(field.text().await.map_err(|e| {
+                        OcrError::InvalidRequest(format!("Invalid languages: {}", e))
+                    })?);
             }
             _ => {
                 // Ignore unknown fields

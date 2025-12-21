@@ -60,7 +60,12 @@ fn test_fixture_path(filename: &str) -> String {
     format!("{}/tests/fixtures/{}", manifest_dir, filename)
 }
 
-async fn test_ocr_file(client: &reqwest::Client, base_url: &str, filename: &str, mime_type: &str) -> OcrResponse {
+async fn test_ocr_file(
+    client: &reqwest::Client,
+    base_url: &str,
+    filename: &str,
+    mime_type: &str,
+) -> OcrResponse {
     let path = test_fixture_path(filename);
     let file_bytes = fs::read(&path).expect(&format!("Failed to read {}", path));
 
@@ -154,7 +159,13 @@ async fn test_ocr_webp() {
     let server = TestServer::start();
     let client = reqwest::Client::new();
 
-    let result = test_ocr_file(&client, &server.base_url(), "sample_text.webp", "image/webp").await;
+    let result = test_ocr_file(
+        &client,
+        &server.base_url(),
+        "sample_text.webp",
+        "image/webp",
+    )
+    .await;
 
     assert!(result.text.contains("Hello"));
     assert!(result.text.contains("World"));
@@ -166,7 +177,13 @@ async fn test_ocr_tiff() {
     let server = TestServer::start();
     let client = reqwest::Client::new();
 
-    let result = test_ocr_file(&client, &server.base_url(), "sample_text.tiff", "image/tiff").await;
+    let result = test_ocr_file(
+        &client,
+        &server.base_url(),
+        "sample_text.tiff",
+        "image/tiff",
+    )
+    .await;
 
     assert!(result.text.contains("Hello"));
     assert!(result.text.contains("World"));
@@ -178,7 +195,13 @@ async fn test_ocr_pdf() {
     let server = TestServer::start();
     let client = reqwest::Client::new();
 
-    let result = test_ocr_file(&client, &server.base_url(), "sample_text.pdf", "application/pdf").await;
+    let result = test_ocr_file(
+        &client,
+        &server.base_url(),
+        "sample_text.pdf",
+        "application/pdf",
+    )
+    .await;
 
     assert!(result.text.contains("Hello"));
     assert!(result.text.contains("World"));

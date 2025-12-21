@@ -33,14 +33,18 @@ impl OcrProcessor {
         tracing::info!("Initializing OCR engine...");
 
         // Load models (will download if not cached)
-        let detection_model_path = ensure_model_downloaded(DETECTION_MODEL_URL, "text-detection.rten")?;
-        let recognition_model_path = ensure_model_downloaded(RECOGNITION_MODEL_URL, "text-recognition.rten")?;
+        let detection_model_path =
+            ensure_model_downloaded(DETECTION_MODEL_URL, "text-detection.rten")?;
+        let recognition_model_path =
+            ensure_model_downloaded(RECOGNITION_MODEL_URL, "text-recognition.rten")?;
 
         // Load models using rten::Model::load_file
-        let detection_model = Model::load_file(&detection_model_path)
-            .map_err(|e| OcrError::InitializationError(format!("Failed to load detection model: {}", e)))?;
-        let recognition_model = Model::load_file(&recognition_model_path)
-            .map_err(|e| OcrError::InitializationError(format!("Failed to load recognition model: {}", e)))?;
+        let detection_model = Model::load_file(&detection_model_path).map_err(|e| {
+            OcrError::InitializationError(format!("Failed to load detection model: {}", e))
+        })?;
+        let recognition_model = Model::load_file(&recognition_model_path).map_err(|e| {
+            OcrError::InitializationError(format!("Failed to load recognition model: {}", e))
+        })?;
 
         let engine = OcrEngine::new(OcrEngineParams {
             detection_model: Some(detection_model),
@@ -48,7 +52,9 @@ impl OcrProcessor {
             decode_method: DecodeMethod::Greedy,
             ..Default::default()
         })
-        .map_err(|e| OcrError::InitializationError(format!("Failed to create OCR engine: {}", e)))?;
+        .map_err(|e| {
+            OcrError::InitializationError(format!("Failed to create OCR engine: {}", e))
+        })?;
 
         tracing::info!("OCR engine initialized successfully");
 
@@ -82,8 +88,9 @@ impl OcrProcessor {
         let dimensions = rgb_img.dimensions();
 
         // Create image source from raw bytes (HWC format)
-        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to create image source: {}", e)))?;
+        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions).map_err(|e| {
+            OcrError::ProcessingError(format!("Failed to create image source: {}", e))
+        })?;
 
         // Prepare input for OCR
         let ocr_input = self
@@ -155,7 +162,10 @@ impl OcrProcessor {
         // If we got meaningful text, return it
         let trimmed_text = direct_text.trim();
         if !trimmed_text.is_empty() && trimmed_text.len() > 10 {
-            tracing::info!("Extracted {} chars of text directly from PDF", trimmed_text.len());
+            tracing::info!(
+                "Extracted {} chars of text directly from PDF",
+                trimmed_text.len()
+            );
             return Ok(OcrResult {
                 text: trimmed_text.to_string(),
                 confidence: 0.95, // High confidence for direct text extraction
@@ -165,7 +175,8 @@ impl OcrProcessor {
 
         // If direct extraction yielded little/no text, try to extract and OCR images
         tracing::info!("PDF has no embedded text, attempting to extract images for OCR");
-        warnings.push("PDF appears to be scanned/image-based, extracting images for OCR".to_string());
+        warnings
+            .push("PDF appears to be scanned/image-based, extracting images for OCR".to_string());
 
         let images = extract_images_from_pdf(path)?;
 
@@ -208,8 +219,9 @@ impl OcrProcessor {
         let rgb_img = img.to_rgb8();
         let dimensions = rgb_img.dimensions();
 
-        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to create image source: {}", e)))?;
+        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions).map_err(|e| {
+            OcrError::ProcessingError(format!("Failed to create image source: {}", e))
+        })?;
 
         let ocr_input = self
             .engine
@@ -308,7 +320,10 @@ fn extract_images_from_pdf(path: &Path) -> Result<Vec<DynamicImage>, OcrError> {
 }
 
 /// Extract an image from a PDF stream
-fn extract_image_from_stream(doc: &lopdf::Document, stream: &lopdf::Stream) -> Result<DynamicImage, OcrError> {
+fn extract_image_from_stream(
+    doc: &lopdf::Document,
+    stream: &lopdf::Stream,
+) -> Result<DynamicImage, OcrError> {
     // Get image dimensions
     let width = stream
         .dict
@@ -327,7 +342,8 @@ fn extract_image_from_stream(doc: &lopdf::Document, stream: &lopdf::Stream) -> R
         as u32;
 
     // Get the image data (decompressed)
-    let data = stream.decompressed_content()
+    let data = stream
+        .decompressed_content()
         .map_err(|e| OcrError::ProcessingError(format!("Failed to decompress image: {}", e)))?;
 
     // Get color space - handle both direct names and indirect references
@@ -343,33 +359,43 @@ fn extract_image_from_stream(doc: &lopdf::Document, stream: &lopdf::Stream) -> R
 
     tracing::debug!(
         "PDF image: {}x{}, {} bits, color_space={}, data_len={}",
-        width, height, bits_per_component, color_space, data.len()
+        width,
+        height,
+        bits_per_component,
+        color_space,
+        data.len()
     );
 
     // Handle different color spaces
     match color_space.as_str() {
         "DeviceGray" => {
             if bits_per_component == 8 && data.len() >= (width * height) as usize {
-                let img = image::GrayImage::from_raw(width, height, data)
-                    .ok_or_else(|| OcrError::ProcessingError("Invalid grayscale image data".to_string()))?;
+                let img = image::GrayImage::from_raw(width, height, data).ok_or_else(|| {
+                    OcrError::ProcessingError("Invalid grayscale image data".to_string())
+                })?;
                 Ok(DynamicImage::ImageLuma8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
                     "Unsupported grayscale format: {} bits, data_len={}, expected={}",
-                    bits_per_component, data.len(), width * height
+                    bits_per_component,
+                    data.len(),
+                    width * height
                 )))
             }
         }
         "DeviceRGB" | "ICCBased" => {
             // ICCBased with 3 components is typically RGB
             if bits_per_component == 8 && data.len() >= (width * height * 3) as usize {
-                let img = image::RgbImage::from_raw(width, height, data)
-                    .ok_or_else(|| OcrError::ProcessingError("Invalid RGB image data".to_string()))?;
+                let img = image::RgbImage::from_raw(width, height, data).ok_or_else(|| {
+                    OcrError::ProcessingError("Invalid RGB image data".to_string())
+                })?;
                 Ok(DynamicImage::ImageRgb8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
                     "Unsupported RGB format: {} bits, data_len={}, expected={}",
-                    bits_per_component, data.len(), width * height * 3
+                    bits_per_component,
+                    data.len(),
+                    width * height * 3
                 )))
             }
         }
@@ -391,13 +417,16 @@ fn extract_image_from_stream(doc: &lopdf::Document, stream: &lopdf::Stream) -> R
                         rgb_data.push(b);
                     }
                 }
-                let img = image::RgbImage::from_raw(width, height, rgb_data)
-                    .ok_or_else(|| OcrError::ProcessingError("Invalid CMYK->RGB conversion".to_string()))?;
+                let img = image::RgbImage::from_raw(width, height, rgb_data).ok_or_else(|| {
+                    OcrError::ProcessingError("Invalid CMYK->RGB conversion".to_string())
+                })?;
                 Ok(DynamicImage::ImageRgb8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
                     "Unsupported CMYK format: {} bits, data_len={}, expected={}",
-                    bits_per_component, data.len(), width * height * 4
+                    bits_per_component,
+                    data.len(),
+                    width * height * 4
                 )))
             }
         }
@@ -454,7 +483,7 @@ fn get_color_space(doc: &lopdf::Document, stream: &lopdf::Stream) -> String {
 fn ensure_model_downloaded(url: &str, filename: &str) -> Result<std::path::PathBuf, OcrError> {
     // Get cache directory
     let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
         .join("activestorage-ocr");
 
     std::fs::create_dir_all(&cache_dir).map_err(|e| {
@@ -490,9 +519,8 @@ fn download_file(url: &str, path: &Path) -> Result<(), OcrError> {
         OcrError::InitializationError(format!("Failed to read response body: {}", e))
     })?;
 
-    file.write_all(&buffer).map_err(|e| {
-        OcrError::InitializationError(format!("Failed to write model file: {}", e))
-    })?;
+    file.write_all(&buffer)
+        .map_err(|e| OcrError::InitializationError(format!("Failed to write model file: {}", e)))?;
 
     Ok(())
 }
