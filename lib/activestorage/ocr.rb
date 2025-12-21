@@ -8,6 +8,7 @@ require_relative "ocr/version"
 require_relative "ocr/configuration"
 require_relative "ocr/client"
 require_relative "ocr/result"
+require_relative "ocr/binary"
 
 if defined?(Rails)
   require_relative "ocr/analyzer"

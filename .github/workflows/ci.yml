@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-ruby:
+    name: Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ruby: ['3.1', '3.2', '3.3', '3.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Run Ruby tests
+        run: bundle exec rake test
+
+  test-rust:
+    name: Rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test
+
+      - name: Build release binary
+        working-directory: rust
+        run: cargo build --release
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test-ruby, test-rust]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Build OCR server
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Start OCR server
+        working-directory: rust
+        run: |
+          ./target/release/activestorage-ocr-server &
+          sleep 3
+          curl -s http://127.0.0.1:9292/health
+
+      - name: Install sandbox dependencies
+        working-directory: test/sandbox
+        run: bundle install
+
+      - name: Set up database
+        working-directory: test/sandbox
+        run: RAILS_ENV=test bin/rails db:create db:migrate
+
+      - name: Run integration tests
+        working-directory: test/sandbox
+        run: RAILS_ENV=test bin/rails test test/integration/
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check Rust formatting
+        working-directory: rust
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        working-directory: rust
+        run: cargo clippy -- -D warnings
