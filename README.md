@@ -42,7 +42,7 @@ Then install the OCR server binary:
 
 ```bash
 bundle install
-bundle exec rake activestorage_ocr:install
+bin/rails activestorage_ocr:install
 ```
 
 ## Quick Start
@@ -50,7 +50,7 @@ bundle exec rake activestorage_ocr:install
 1. **Start the OCR server:**
 
    ```bash
-   bundle exec rake activestorage_ocr:start
+   bin/rails activestorage_ocr:start
    ```
 
 2. **Use the client in your Rails app:**
@@ -93,16 +93,16 @@ end
 
 ```bash
 # Install the OCR server binary for your platform
-bundle exec rake activestorage_ocr:install
+bin/rails activestorage_ocr:install
 
 # Start the OCR server
-bundle exec rake activestorage_ocr:start
+bin/rails activestorage_ocr:start
 
 # Check server health
-bundle exec rake activestorage_ocr:health
+bin/rails activestorage_ocr:health
 
 # Show binary info (platform, path, version)
-bundle exec rake activestorage_ocr:info
+bin/rails activestorage_ocr:info
 ```
 
 ## API Endpoints
