@@ -3,8 +3,8 @@
 Gem::Specification.new do |spec|
   spec.name          = "activestorage-ocr"
   spec.version       = "0.1.0"
-  spec.authors       = ["Your Name"]
-  spec.email         = ["your@email.com"]
+  spec.authors       = ["Michael Rispoli"]
+  spec.email         = ["mike.rispoli@causeofakind.com"]
 
   spec.summary       = "OCR support for Rails Active Storage"
   spec.description   = "Extract text from images and PDFs stored in Active Storage using a high-performance Rust OCR server"

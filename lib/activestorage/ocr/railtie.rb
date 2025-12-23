@@ -2,7 +2,20 @@
 
 module ActiveStorage
   module Ocr
+    # Rails integration via Railtie.
+    #
+    # Automatically registers the OCR analyzer with Active Storage and
+    # provides rake tasks for managing the OCR server.
+    #
+    # == Rake Tasks
+    #
+    # * +activestorage_ocr:install+ - Download and install the server binary
+    # * +activestorage_ocr:start+ - Start the OCR server
+    # * +activestorage_ocr:health+ - Check if the server is responding
+    # * +activestorage_ocr:info+ - Show binary and platform information
+    #
     class Railtie < Rails::Railtie
+      # Registers the OCR analyzer with Active Storage.
       initializer "activestorage-ocr.add_analyzer" do
         config.after_initialize do
           # Prepend our analyzer so it runs before other analyzers
@@ -12,7 +25,7 @@ module ActiveStorage
         end
       end
 
-      # Add rake tasks
+      # Defines rake tasks for server management.
       rake_tasks do
         namespace :activestorage_ocr do
           desc "Install the OCR server binary"

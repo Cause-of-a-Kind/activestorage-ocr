@@ -2,9 +2,39 @@
 
 module ActiveStorage
   module Ocr
+    # Represents the result of an OCR operation.
+    #
+    # Contains the extracted text, confidence score, and processing metadata.
+    #
+    # == Example
+    #
+    #   result = client.extract_text(blob)
+    #   if result.success?
+    #     puts result.text
+    #     puts "Confidence: #{result.confidence}"
+    #   end
+    #
     class Result
-      attr_reader :text, :confidence, :processing_time_ms, :warnings
+      # The extracted text content.
+      attr_reader :text
 
+      # Confidence score from 0.0 to 1.0.
+      attr_reader :confidence
+
+      # Time taken to process the file in milliseconds.
+      attr_reader :processing_time_ms
+
+      # Array of warning messages from the OCR server.
+      attr_reader :warnings
+
+      # Creates a new Result.
+      #
+      # ==== Parameters
+      #
+      # * +text+ - The extracted text
+      # * +confidence+ - Confidence score (0.0 to 1.0)
+      # * +processing_time_ms+ - Processing time in milliseconds
+      # * +warnings+ - Array of warning messages (optional)
       def initialize(text:, confidence:, processing_time_ms:, warnings: [])
         @text = text
         @confidence = confidence
@@ -12,10 +42,20 @@ module ActiveStorage
         @warnings = warnings
       end
 
+      # Returns whether OCR successfully extracted text.
+      #
+      # ==== Returns
+      #
+      # +true+ if text was extracted, +false+ if text is nil or empty.
       def success?
         !text.nil? && !text.empty?
       end
 
+      # Converts the result to a Hash.
+      #
+      # ==== Returns
+      #
+      # A Hash with all result attributes.
       def to_h
         {
           text: text,
@@ -25,6 +65,13 @@ module ActiveStorage
         }
       end
 
+      # Converts the result to Active Storage metadata format.
+      #
+      # This format is suitable for storing in blob metadata.
+      #
+      # ==== Returns
+      #
+      # A Hash with +:ocr_text+, +:ocr_confidence+, and +:ocr_processed_at+.
       def to_metadata
         {
           ocr_text: text,
