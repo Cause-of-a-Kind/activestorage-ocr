@@ -16,13 +16,14 @@ module ActiveStorage
     #
     class Railtie < Rails::Railtie
       # Registers the OCR analyzer with Active Storage.
-      initializer "activestorage-ocr.add_analyzer" do
-        config.after_initialize do
-          # Prepend our analyzer so it runs before other analyzers
-          if defined?(ActiveStorage) && ActiveStorage.respond_to?(:analyzers)
-            ActiveStorage.analyzers.prepend(ActiveStorage::Ocr::Analyzer)
-          end
-        end
+      #
+      # We use an initializer that runs after Active Storage's engine is loaded
+      # to prepend our analyzer to the configuration's analyzers list.
+      # This ensures our analyzer runs before the default image analyzers.
+      initializer "activestorage-ocr.add_analyzer", after: "active_storage.configs" do |app|
+        # Prepend to the config's analyzers list, which ActiveStorage::Engine
+        # later copies to ActiveStorage.analyzers in its after_initialize
+        app.config.active_storage.analyzers.prepend(ActiveStorage::Ocr::Analyzer)
       end
 
       # Defines rake tasks for server management.
@@ -56,8 +57,9 @@ module ActiveStorage
             end
 
             config = ActiveStorage::Ocr.configuration
-            host = config.server_host.gsub(%r{https?://}, "")
-            port = config.server_port
+            uri = URI.parse(config.server_url)
+            host = uri.host || "127.0.0.1"
+            port = uri.port || 9292
 
             puts "Starting OCR server on #{host}:#{port}..."
             exec(binary, "--host", host, "--port", port.to_s)
