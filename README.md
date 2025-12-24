@@ -13,7 +13,7 @@ OCR for Rails Active Storage attachments, powered by Rust and [ocrs](https://git
 - **Pure Rust** - No Tesseract or system dependencies required
 - **Self-contained** - Models download automatically on first run (~50MB)
 - **Fast** - Processes images in ~150ms
-- **HTTP/JSON API** - Easy to debug and integrate
+- **Automatic** - OCR runs automatically when files are uploaded via Active Storage
 
 **Supported Formats:**
 - Images: PNG, JPEG, TIFF, WebP, GIF, BMP
@@ -32,53 +32,95 @@ OCR for Rails Active Storage attachments, powered by Rust and [ocrs](https://git
 
 ## Installation
 
-Add to your Gemfile:
+**1. Add to your Gemfile:**
 
 ```ruby
 gem "activestorage-ocr"
 ```
 
-Then install the OCR server binary:
+**2. Install the gem and OCR server binary:**
 
 ```bash
 bundle install
 bin/rails activestorage_ocr:install
 ```
 
-## Quick Start
+**3. Add the OCR server to your `Procfile.dev`:**
 
-1. **Start the OCR server:**
+```procfile
+web: bin/rails server
+ocr: activestorage-ocr-server --host 127.0.0.1 --port 9292
+```
 
-   ```bash
-   bin/rails activestorage_ocr:start
-   ```
+Now when you run `bin/dev`, the OCR server starts automatically alongside Rails.
 
-2. **Use the client in your Rails app:**
+> **Note:** If you don't have a `Procfile.dev`, create one. Rails 7+ apps typically use `bin/dev` with [foreman](https://github.com/ddollar/foreman) or [overmind](https://github.com/DarthSim/overmind) to manage multiple processes.
 
-   ```ruby
-   # In rails console or your code
-   client = ActiveStorage::Ocr::Client.new
+## Usage
 
-   # Check server health
-   client.healthy?  # => true
+Once installed, OCR happens **automatically** when you upload images or PDFs through Active Storage. The extracted text is stored in the blob's metadata.
 
-   # Extract text from a file
-   result = client.extract_text_from_path("/path/to/image.png", content_type: "image/png")
-   result.text        # => "Extracted text..."
-   result.confidence  # => 0.95
+### Accessing OCR Results
 
-   # Extract text from an Active Storage attachment
-   result = client.extract_text(document.file)
-   ```
+```ruby
+# After uploading a file
+document.file.analyze  # Triggers OCR (usually happens automatically)
+
+# Access the results from metadata
+document.file.metadata["ocr_text"]         # => "Extracted text..."
+document.file.metadata["ocr_confidence"]   # => 0.85
+document.file.metadata["ocr_processed_at"] # => "2024-12-24T12:00:00Z"
+```
+
+### Helper Methods (Optional)
+
+Add convenience methods to your model:
+
+```ruby
+class Document < ApplicationRecord
+  has_one_attached :file
+
+  def ocr_text
+    file.metadata["ocr_text"]
+  end
+
+  def ocr_confidence
+    file.metadata["ocr_confidence"]
+  end
+
+  def ocr_processed?
+    file.metadata["ocr_processed_at"].present?
+  end
+end
+```
+
+### Using the Client Directly
+
+You can also use the client directly for more control:
+
+```ruby
+client = ActiveStorage::Ocr::Client.new
+
+# Check server health
+client.healthy?  # => true
+
+# Extract text from a file path
+result = client.extract_text_from_path("/path/to/image.png")
+result.text        # => "Extracted text..."
+result.confidence  # => 0.95
+
+# Extract text from an Active Storage attachment
+result = client.extract_text(document.file)
+```
 
 ## Configuration
 
 ```ruby
 # config/initializers/activestorage_ocr.rb
 ActiveStorage::Ocr.configure do |config|
-  config.server_host = "127.0.0.1"
-  config.server_port = 9292
-  config.timeout = 60
+  config.server_url = ENV.fetch("ACTIVESTORAGE_OCR_SERVER_URL", "http://127.0.0.1:9292")
+  config.timeout = 60        # Request timeout in seconds
+  config.open_timeout = 10   # Connection timeout in seconds
 end
 ```
 
@@ -86,8 +128,31 @@ end
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ACTIVESTORAGE_OCR_HOST` | `127.0.0.1` | Server host |
-| `ACTIVESTORAGE_OCR_PORT` | `9292` | Server port |
+| `ACTIVESTORAGE_OCR_SERVER_URL` | `http://127.0.0.1:9292` | Full URL to the OCR server |
+
+## Production Deployment
+
+For production, add the OCR server to your `Procfile`:
+
+```procfile
+web: bundle exec puma -C config/puma.rb
+ocr: activestorage-ocr-server --host 127.0.0.1 --port 9292
+worker: bundle exec rake solid_queue:start
+```
+
+### Docker
+
+In your `Dockerfile`, the OCR server binary is installed via the gem. Ensure it's in your PATH or reference it directly from the gem's bin directory.
+
+### Fly.io
+
+For Fly.io deployments, use the `[processes]` section in `fly.toml`:
+
+```toml
+[processes]
+  web = "bundle exec puma -C config/puma.rb"
+  ocr = "activestorage-ocr-server --host 0.0.0.0 --port 9292"
+```
 
 ## Rake Tasks
 
@@ -95,7 +160,7 @@ end
 # Install the OCR server binary for your platform
 bin/rails activestorage_ocr:install
 
-# Start the OCR server
+# Start the OCR server (for manual testing)
 bin/rails activestorage_ocr:start
 
 # Check server health
