@@ -120,11 +120,12 @@ module ActiveStorage
 
         # Downloads and installs the binary.
         #
-        # Downloads from GitHub releases and extracts to the gem's bin directory.
+        # Downloads from GitHub releases and extracts to the specified directory.
         #
         # ==== Parameters
         #
         # * +force+ - If true, reinstalls even if already installed
+        # * +path+ - Custom installation directory (defaults to gem's bin directory)
         #
         # ==== Returns
         #
@@ -133,8 +134,16 @@ module ActiveStorage
         # ==== Raises
         #
         # RuntimeError if the download fails.
-        def install!(force: false)
-          return binary_path if installed? && !force
+        def install!(force: false, path: nil)
+          target_dir = path || install_dir
+          target_path = File.join(target_dir, BINARY_NAME)
+
+          if !force && File.executable?(target_path)
+            puts "Binary already installed at #{target_path}"
+            return target_path
+          end
+
+          FileUtils.mkdir_p(target_dir)
 
           puts "Downloading activestorage-ocr-server for #{platform}..."
 
@@ -147,9 +156,9 @@ module ActiveStorage
                   "You may need to build from source: cd rust && cargo build --release"
           end
 
-          extract_binary(response.body)
-          puts "Installed to #{binary_path}"
-          binary_path
+          extract_binary(response.body, target_path)
+          puts "Installed to #{target_path}"
+          target_path
         end
 
         private
@@ -174,17 +183,17 @@ module ActiveStorage
         end
 
         # Extracts the binary from a gzipped tarball.
-        def extract_binary(tarball_data)
+        def extract_binary(tarball_data, target_path)
           gz = Zlib::GzipReader.new(StringIO.new(tarball_data))
           tar = Gem::Package::TarReader.new(gz)
 
           tar.each do |entry|
             next unless entry.file? && entry.full_name == BINARY_NAME
 
-            File.open(binary_path, "wb") do |f|
+            File.open(target_path, "wb") do |f|
               f.write(entry.read)
             end
-            File.chmod(0o755, binary_path)
+            File.chmod(0o755, target_path)
             return
           end
 

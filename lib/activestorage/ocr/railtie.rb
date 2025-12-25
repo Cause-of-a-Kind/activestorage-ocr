@@ -29,9 +29,10 @@ module ActiveStorage
       # Defines rake tasks for server management.
       rake_tasks do
         namespace :activestorage_ocr do
-          desc "Install the OCR server binary"
+          desc "Install the OCR server binary (optional: path=./bin/dist)"
           task :install do
-            ActiveStorage::Ocr::Binary.install!
+            path = ENV["path"]
+            ActiveStorage::Ocr::Binary.install!(path: path)
           end
 
           desc "Check OCR server health"

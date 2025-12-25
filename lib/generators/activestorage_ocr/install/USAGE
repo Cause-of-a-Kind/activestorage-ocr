@@ -1,0 +1,12 @@
+Description:
+    Installs the OCR server binary and creates a wrapper script.
+
+Example:
+    rails generate activestorage_ocr:install
+
+    This will create:
+        bin/activestorage-ocr-server - Wrapper script that runs the OCR server
+        bin/dist/activestorage-ocr-server - The actual binary (gitignored)
+
+    And update:
+        .gitignore - Adds /bin/dist/ to ignore the binary

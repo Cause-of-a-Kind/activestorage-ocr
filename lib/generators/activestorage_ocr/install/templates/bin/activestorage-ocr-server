@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+
+# Navigate to app root
+cd "$(dirname "$0")/.."
+
+BINARY_PATH="./bin/dist/activestorage-ocr-server"
+
+# Download binary if not present
+if [ ! -f "$BINARY_PATH" ]; then
+  echo "OCR server binary not found. Downloading..."
+  ./bin/rails activestorage_ocr:install path=./bin/dist
+fi
+
+# Execute the binary with all passed arguments
+exec "$BINARY_PATH" "$@"

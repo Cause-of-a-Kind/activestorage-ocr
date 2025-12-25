@@ -132,26 +132,127 @@ end
 
 ## Production Deployment
 
-For production, add the OCR server to your `Procfile`:
+For production deployments, the OCR server binary needs to be installed in your app's `bin/` directory (not the gem directory) so it can be referenced from your Procfile.
+
+### Setup for Production
+
+**1. Run the install generator:**
+
+```bash
+rails generate activestorage_ocr:install
+```
+
+This creates:
+- `bin/activestorage-ocr-server` - A wrapper script that runs the OCR server
+- `bin/dist/activestorage-ocr-server` - The actual binary (gitignored)
+
+**2. Add to your Procfile:**
 
 ```procfile
 web: bundle exec puma -C config/puma.rb
-ocr: activestorage-ocr-server --host 127.0.0.1 --port 9292
-worker: bundle exec rake solid_queue:start
+ocr: bin/activestorage-ocr-server --host 127.0.0.1 --port 9292
 ```
 
-### Docker
+### Docker Deployment
 
-In your `Dockerfile`, the OCR server binary is installed via the gem. Ensure it's in your PATH or reference it directly from the gem's bin directory.
+In your `Dockerfile`, run the generator during the build to install the binary:
 
-### Fly.io
+```dockerfile
+# Install gems
+RUN bundle install
 
-For Fly.io deployments, use the `[processes]` section in `fly.toml`:
+# Install OCR server binary to bin/dist/
+RUN bundle exec rails activestorage_ocr:install path=./bin/dist
+
+# Alternatively, run the full generator:
+# RUN bundle exec rails generate activestorage_ocr:install
+```
+
+Use foreman to manage both processes:
+
+```dockerfile
+# Procfile
+CMD ["bundle", "exec", "foreman", "start"]
+```
+
+### Fly.io Deployment
+
+**fly.toml configuration:**
 
 ```toml
-[processes]
-  web = "bundle exec puma -C config/puma.rb"
-  ocr = "activestorage-ocr-server --host 0.0.0.0 --port 9292"
+app = "your-app-name"
+primary_region = "iad"
+
+[deploy]
+  # Note: Don't use release_command for SQLite with volumes
+  # Migrations run in docker-entrypoint instead
+
+[env]
+  RAILS_ENV = "production"
+  ACTIVESTORAGE_OCR_SERVER_URL = "http://127.0.0.1:9292"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+[[mounts]]
+  source = "data"
+  destination = "/rails/storage"
+
+[[vm]]
+  memory = "1024mb"
+  cpu_kind = "shared"
+  cpus = 2
+```
+
+**Procfile for Fly.io:**
+
+```procfile
+web: bundle exec puma -C config/puma.rb
+ocr: bin/activestorage-ocr-server --host 127.0.0.1 --port 9292
+```
+
+**Important notes for Fly.io:**
+- Use `foreman` as the entrypoint to run both processes
+- The OCR server binds to `127.0.0.1` (internal only)
+- Set `ACTIVESTORAGE_OCR_SERVER_URL` env var to `http://127.0.0.1:9292`
+- For SQLite with volumes, run migrations in `docker-entrypoint` not `release_command`
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ACTIVESTORAGE_OCR_SERVER_URL` | `http://127.0.0.1:9292` | URL where the OCR server is running |
+| `ACTIVESTORAGE_OCR_TIMEOUT` | `30` | Request timeout in seconds |
+| `ACTIVESTORAGE_OCR_OPEN_TIMEOUT` | `5` | Connection timeout in seconds |
+
+### Troubleshooting
+
+**Binary not found:**
+```
+Error: bin/activestorage-ocr-server: No such file or directory
+```
+Solution: Run `rails generate activestorage_ocr:install` or `rails activestorage_ocr:install path=./bin/dist`
+
+**Connection refused:**
+```
+Faraday::ConnectionFailed: Connection refused
+```
+Solution: Ensure the OCR server is running and `ACTIVESTORAGE_OCR_SERVER_URL` is correctly configured.
+
+**Timeout errors:**
+```
+Faraday::TimeoutError
+```
+Solution: Increase timeout values in the initializer or reduce image/PDF sizes.
+
+**Health check:**
+```bash
+# Verify the OCR server is responding
+curl http://localhost:9292/health
+
+# Or via rake task
+bin/rails activestorage_ocr:health
 ```
 
 ## Rake Tasks
