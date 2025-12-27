@@ -76,7 +76,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/ocr", post(handle_ocr))
-        .route("/ocr/{engine}", post(handle_ocr_with_engine))
+        .route("/ocr/:engine", post(handle_ocr_with_engine))
         .route("/health", get(handle_health))
         .route("/info", get(handle_info))
         .layer(DefaultBodyLimit::max(max_file_size))

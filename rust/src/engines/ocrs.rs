@@ -112,9 +112,8 @@ impl OcrsEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // ocrs doesn't provide confidence scores per-character easily,
-        // so we'll use a placeholder for now
-        let confidence = if text.is_empty() { 0.0 } else { 0.85 };
+        // Calculate confidence using text quality heuristics
+        let confidence = calculate_confidence(&text);
 
         Ok(OcrResult {
             text,
@@ -177,7 +176,7 @@ impl OcrsEngine {
         }
 
         let combined_text = all_text.join("\n\n");
-        let confidence = if combined_text.is_empty() { 0.0 } else { 0.75 };
+        let confidence = calculate_confidence(&combined_text);
 
         Ok(OcrResult {
             text: combined_text,
@@ -224,7 +223,7 @@ impl OcrsEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let confidence = if text.is_empty() { 0.0 } else { 0.85 };
+        let confidence = calculate_confidence(&text);
 
         Ok(OcrResult {
             text,
@@ -267,6 +266,135 @@ impl OcrEngine for OcrsEngine {
     fn supported_languages(&self) -> Vec<String> {
         // ocrs currently only supports English/Latin alphabet
         vec!["eng".to_string()]
+    }
+}
+
+// ============================================================================
+// Confidence scoring heuristics
+// ============================================================================
+
+/// Calculate confidence score based on text quality heuristics.
+///
+/// Since ocrs doesn't provide per-character confidence scores, we analyze
+/// the recognized text for patterns that indicate OCR quality.
+fn calculate_confidence(text: &str) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    if text.len() < 5 {
+        return 0.5; // Too short to judge accurately
+    }
+
+    let char_score = analyze_char_frequency(text);
+    let word_score = analyze_word_lengths(text);
+    let whitespace_score = analyze_whitespace(text);
+    let repetition_score = detect_repetition(text);
+
+    let confidence =
+        0.40 * char_score + 0.30 * word_score + 0.15 * whitespace_score + 0.15 * repetition_score;
+
+    confidence.clamp(0.0, 1.0)
+}
+
+/// Analyze character frequency for signs of garbled OCR.
+///
+/// Penalizes text with too many special/control characters or too few letters.
+fn analyze_char_frequency(text: &str) -> f32 {
+    let total = text.chars().count();
+    if total == 0 {
+        return 0.0;
+    }
+
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    let special = text
+        .chars()
+        .filter(|c| !c.is_alphanumeric() && !c.is_whitespace() && !c.is_ascii_punctuation())
+        .count();
+
+    // Penalize high special char ratio
+    let special_ratio = special as f32 / total as f32;
+    let special_penalty = 1.0 - (special_ratio * 10.0).min(1.0);
+
+    // Penalize very low letter content (unless it's a numeric document)
+    let letter_ratio = letters as f32 / total as f32;
+    let letter_score = (letter_ratio * 1.5).min(1.0);
+
+    special_penalty * 0.6 + letter_score * 0.4
+}
+
+/// Analyze word length distribution.
+///
+/// Garbled OCR often produces single-character "words" or very long sequences.
+fn analyze_word_lengths(text: &str) -> f32 {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return 0.5;
+    }
+
+    let total_len: usize = words.iter().map(|w| w.len()).sum();
+    let avg_len = total_len as f32 / words.len() as f32;
+
+    // Ideal average word length: 4-8 chars
+    let avg_score = match avg_len as usize {
+        0..=1 => 0.3,
+        2..=3 => 0.7,
+        4..=8 => 1.0,
+        9..=12 => 0.8,
+        _ => 0.4,
+    };
+
+    // Penalize too many single-char "words"
+    let single_count = words.iter().filter(|w| w.len() == 1).count();
+    let single_ratio = single_count as f32 / words.len() as f32;
+    let single_penalty = 1.0 - (single_ratio * 1.5).min(0.5);
+
+    avg_score * single_penalty
+}
+
+/// Analyze whitespace ratio.
+///
+/// Normal text has ~10-25% whitespace. Too dense or too sparse indicates issues.
+fn analyze_whitespace(text: &str) -> f32 {
+    let total = text.chars().count();
+    if total == 0 {
+        return 0.0;
+    }
+
+    let whitespace = text.chars().filter(|c| c.is_whitespace()).count();
+    let ratio = (whitespace as f32 / total as f32) * 100.0;
+
+    match ratio as usize {
+        0..=5 => 0.5,   // Too dense
+        6..=10 => 0.8,  // Slightly dense
+        11..=25 => 1.0, // Ideal
+        26..=40 => 0.7, // Slightly sparse
+        _ => 0.3,       // Too sparse
+    }
+}
+
+/// Detect repeated character sequences.
+///
+/// Patterns like "aaaa" or "####" often indicate OCR confusion.
+fn detect_repetition(text: &str) -> f32 {
+    let mut max_repeat = 1;
+    let mut current = 1;
+    let mut prev: Option<char> = None;
+
+    for c in text.chars() {
+        if Some(c) == prev && !c.is_whitespace() {
+            current += 1;
+            max_repeat = max_repeat.max(current);
+        } else {
+            current = 1;
+        }
+        prev = Some(c);
+    }
+
+    match max_repeat {
+        1..=3 => 1.0,
+        4..=5 => 0.8,
+        6..=10 => 0.5,
+        _ => 0.2,
     }
 }
 
@@ -535,4 +663,94 @@ fn download_file(url: &str, path: &Path) -> Result<(), OcrError> {
         .map_err(|e| OcrError::InitializationError(format!("Failed to write model file: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_text_returns_zero() {
+        assert_eq!(calculate_confidence(""), 0.0);
+    }
+
+    #[test]
+    fn test_short_text_returns_half() {
+        assert_eq!(calculate_confidence("Hi"), 0.5);
+        assert_eq!(calculate_confidence("Test"), 0.5);
+    }
+
+    #[test]
+    fn test_clean_text_high_confidence() {
+        let text = "Hello World OCR Test 12345";
+        let confidence = calculate_confidence(text);
+        assert!(confidence > 0.7, "Expected > 0.7, got {}", confidence);
+    }
+
+    #[test]
+    fn test_garbled_text_low_confidence() {
+        // Lots of special characters indicates bad OCR
+        let text = "§±®©¥€£¢¤";
+        let confidence = calculate_confidence(text);
+        assert!(confidence < 0.5, "Expected < 0.5, got {}", confidence);
+    }
+
+    #[test]
+    fn test_repeated_chars_lower_confidence() {
+        let text = "Hello aaaaaaaaaaaa World";
+        let confidence = calculate_confidence(text);
+        // Should be lower than clean text due to repetition
+        assert!(confidence < 0.9, "Expected < 0.9, got {}", confidence);
+    }
+
+    #[test]
+    fn test_single_char_words_lower_confidence() {
+        // Many single-char "words" suggests garbled OCR
+        let text = "a b c d e f g h i j k l m n o p";
+        let confidence = calculate_confidence(text);
+        assert!(confidence < 0.7, "Expected < 0.7, got {}", confidence);
+    }
+
+    #[test]
+    fn test_normal_sentence_good_confidence() {
+        let text = "The quick brown fox jumps over the lazy dog.";
+        let confidence = calculate_confidence(text);
+        assert!(confidence > 0.75, "Expected > 0.75, got {}", confidence);
+    }
+
+    #[test]
+    fn test_analyze_char_frequency_normal() {
+        let score = analyze_char_frequency("Hello World");
+        assert!(score > 0.8, "Expected > 0.8, got {}", score);
+    }
+
+    #[test]
+    fn test_analyze_char_frequency_special() {
+        let score = analyze_char_frequency("§±®©¥€£¢¤ƒ");
+        assert!(score < 0.5, "Expected < 0.5, got {}", score);
+    }
+
+    #[test]
+    fn test_analyze_word_lengths_normal() {
+        let score = analyze_word_lengths("Hello World Test");
+        assert!(score > 0.8, "Expected > 0.8, got {}", score);
+    }
+
+    #[test]
+    fn test_analyze_whitespace_normal() {
+        let text = "Hello World Test String";
+        let score = analyze_whitespace(text);
+        assert!(score > 0.7, "Expected > 0.7, got {}", score);
+    }
+
+    #[test]
+    fn test_detect_repetition_none() {
+        assert_eq!(detect_repetition("Hello World"), 1.0);
+    }
+
+    #[test]
+    fn test_detect_repetition_some() {
+        let score = detect_repetition("Hellooooo World");
+        assert!(score < 1.0, "Expected < 1.0, got {}", score);
+    }
 }

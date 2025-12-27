@@ -23,6 +23,8 @@ struct OcrResponse {
 struct EngineInfo {
     name: String,
     description: String,
+    supported_formats: Vec<String>,
+    supported_languages: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +33,8 @@ struct InfoResponse {
     version: String,
     default_engine: String,
     available_engines: Vec<EngineInfo>,
-    supported_formats: Vec<String>,
+    max_file_size_bytes: usize,
+    default_language: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,9 +271,14 @@ async fn test_info_endpoint() {
         .collect();
     assert!(engine_names.contains(&"ocrs"));
 
-    // Check supported formats
-    assert!(response.supported_formats.contains(&"image/png".to_string()));
-    assert!(response.supported_formats.contains(&"application/pdf".to_string()));
+    // Check supported formats are available on the ocrs engine
+    let ocrs_engine = response
+        .available_engines
+        .iter()
+        .find(|e| e.name == "ocrs")
+        .expect("ocrs engine should be available");
+    assert!(ocrs_engine.supported_formats.contains(&"image/png".to_string()));
+    assert!(ocrs_engine.supported_formats.contains(&"application/pdf".to_string()));
 }
 
 async fn test_ocr_file_with_engine(
@@ -279,7 +287,7 @@ async fn test_ocr_file_with_engine(
     filename: &str,
     mime_type: &str,
     engine: &str,
-) -> Result<OcrResponse, reqwest::Error> {
+) -> OcrResponse {
     let path = test_fixture_path(filename);
     let file_bytes = fs::read(&path).expect(&format!("Failed to read {}", path));
 
@@ -294,9 +302,17 @@ async fn test_ocr_file_with_engine(
         .post(&format!("{}/ocr/{}", base_url, engine))
         .multipart(form)
         .send()
-        .await?;
+        .await
+        .expect("Failed to send request");
 
-    response.json().await
+    assert!(
+        response.status().is_success(),
+        "Expected success status, got {} for /ocr/{}",
+        response.status(),
+        engine
+    );
+
+    response.json().await.expect("Failed to parse OCR response")
 }
 
 #[tokio::test]
@@ -306,8 +322,7 @@ async fn test_ocr_with_explicit_ocrs_engine() {
 
     let result =
         test_ocr_file_with_engine(&client, &server.base_url(), "sample_text.png", "image/png", "ocrs")
-            .await
-            .expect("Failed to get OCR result");
+            .await;
 
     assert!(result.text.contains("Hello"));
     assert_eq!(result.engine, Some("ocrs".to_string()));
