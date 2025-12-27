@@ -64,10 +64,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.host, config.port);
     let max_file_size = config.max_file_size;
 
-    tracing::info!(
-        "Available engines: {:?}",
-        registry.list()
-    );
+    tracing::info!("Available engines: {:?}", registry.list());
 
     let state = AppState {
         registry: Arc::new(registry),
@@ -96,9 +93,10 @@ async fn handle_ocr(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Json<OcrResponse>, OcrError> {
-    let engine = state.registry.default().ok_or_else(|| {
-        OcrError::InitializationError("No default engine available".to_string())
-    })?;
+    let engine = state
+        .registry
+        .default()
+        .ok_or_else(|| OcrError::InitializationError("No default engine available".to_string()))?;
 
     process_ocr_request(state, engine, multipart).await
 }

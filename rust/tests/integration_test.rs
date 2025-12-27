@@ -277,8 +277,12 @@ async fn test_info_endpoint() {
         .iter()
         .find(|e| e.name == "ocrs")
         .expect("ocrs engine should be available");
-    assert!(ocrs_engine.supported_formats.contains(&"image/png".to_string()));
-    assert!(ocrs_engine.supported_formats.contains(&"application/pdf".to_string()));
+    assert!(ocrs_engine
+        .supported_formats
+        .contains(&"image/png".to_string()));
+    assert!(ocrs_engine
+        .supported_formats
+        .contains(&"application/pdf".to_string()));
 }
 
 async fn test_ocr_file_with_engine(
@@ -320,9 +324,14 @@ async fn test_ocr_with_explicit_ocrs_engine() {
     let server = TestServer::start();
     let client = reqwest::Client::new();
 
-    let result =
-        test_ocr_file_with_engine(&client, &server.base_url(), "sample_text.png", "image/png", "ocrs")
-            .await;
+    let result = test_ocr_file_with_engine(
+        &client,
+        &server.base_url(),
+        "sample_text.png",
+        "image/png",
+        "ocrs",
+    )
+    .await;
 
     assert!(result.text.contains("Hello"));
     assert_eq!(result.engine, Some("ocrs".to_string()));

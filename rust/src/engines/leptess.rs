@@ -26,8 +26,8 @@ impl LeptessEngine {
         let default_language = config.default_language.clone();
 
         // Validate that tessdata is accessible by doing a test initialization
-        let test_tess = Tesseract::new(tessdata_path.as_deref(), Some(&default_language))
-            .map_err(|e| {
+        let test_tess =
+            Tesseract::new(tessdata_path.as_deref(), Some(&default_language)).map_err(|e| {
                 OcrError::InitializationError(format!(
                     "Failed to initialize Tesseract: {}. \
                      Ensure tessdata is installed and TESSDATA_PREFIX is set correctly.",
@@ -52,23 +52,20 @@ impl LeptessEngine {
 
     /// Process an image file
     fn process_image(&self, path: &Path) -> Result<OcrResult, OcrError> {
-        let path_str = path.to_str().ok_or_else(|| {
-            OcrError::ProcessingError("Invalid path encoding".to_string())
-        })?;
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| OcrError::ProcessingError("Invalid path encoding".to_string()))?;
 
-        let mut tess = Tesseract::new(
-            self.tessdata_path.as_deref(),
-            Some(&self.default_language),
-        )
-        .map_err(|e| OcrError::ProcessingError(format!("Failed to create Tesseract: {}", e)))?;
+        let mut tess = Tesseract::new(self.tessdata_path.as_deref(), Some(&self.default_language))
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to create Tesseract: {}", e)))?;
 
         tess = tess
             .set_image(path_str)
             .map_err(|e| OcrError::ProcessingError(format!("Failed to set image: {}", e)))?;
 
-        tess = tess.recognize().map_err(|e| {
-            OcrError::ProcessingError(format!("Failed to recognize text: {}", e))
-        })?;
+        tess = tess
+            .recognize()
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to recognize text: {}", e)))?;
 
         let text = tess
             .get_text()
@@ -133,10 +130,13 @@ impl LeptessEngine {
             let temp_file = tempfile::Builder::new()
                 .suffix(".png")
                 .tempfile()
-                .map_err(|e| OcrError::ProcessingError(format!("Failed to create temp file: {}", e)))?;
+                .map_err(|e| {
+                    OcrError::ProcessingError(format!("Failed to create temp file: {}", e))
+                })?;
 
-            img.save(temp_file.path())
-                .map_err(|e| OcrError::ProcessingError(format!("Failed to save temp image: {}", e)))?;
+            img.save(temp_file.path()).map_err(|e| {
+                OcrError::ProcessingError(format!("Failed to save temp image: {}", e))
+            })?;
 
             match self.process_image(temp_file.path()) {
                 Ok(result) => {
@@ -201,19 +201,19 @@ impl OcrEngine for LeptessEngine {
         // Tesseract supports many languages - return common ones
         // Users can install additional language packs
         vec![
-            "eng".to_string(), // English
-            "deu".to_string(), // German
-            "fra".to_string(), // French
-            "spa".to_string(), // Spanish
-            "ita".to_string(), // Italian
-            "por".to_string(), // Portuguese
-            "nld".to_string(), // Dutch
-            "jpn".to_string(), // Japanese
+            "eng".to_string(),     // English
+            "deu".to_string(),     // German
+            "fra".to_string(),     // French
+            "spa".to_string(),     // Spanish
+            "ita".to_string(),     // Italian
+            "por".to_string(),     // Portuguese
+            "nld".to_string(),     // Dutch
+            "jpn".to_string(),     // Japanese
             "chi_sim".to_string(), // Chinese Simplified
             "chi_tra".to_string(), // Chinese Traditional
-            "kor".to_string(), // Korean
-            "ara".to_string(), // Arabic
-            "rus".to_string(), // Russian
+            "kor".to_string(),     // Korean
+            "ara".to_string(),     // Arabic
+            "rus".to_string(),     // Russian
         ]
     }
 }
