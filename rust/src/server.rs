@@ -1,9 +1,10 @@
 use crate::config::Config;
+use crate::engine::OcrEngine;
+use crate::engines::EngineRegistry;
 use crate::error::OcrError;
-use crate::ocr::OcrProcessor;
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, Multipart, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     response::{IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -17,7 +18,7 @@ use tower_http::trace::TraceLayer;
 /// Shared application state
 #[derive(Clone)]
 pub struct AppState {
-    pub engine: Arc<OcrProcessor>,
+    pub registry: Arc<EngineRegistry>,
     pub config: Arc<Config>,
 }
 
@@ -28,6 +29,16 @@ pub struct OcrResponse {
     pub confidence: f32,
     pub processing_time_ms: u64,
     pub warnings: Vec<String>,
+    pub engine: String,
+}
+
+/// Engine info for /info response
+#[derive(Serialize)]
+pub struct EngineInfoResponse {
+    pub name: String,
+    pub description: String,
+    pub supported_formats: Vec<String>,
+    pub supported_languages: Vec<String>,
 }
 
 /// Health check response
@@ -41,25 +52,31 @@ pub struct HealthResponse {
 #[derive(Serialize)]
 pub struct InfoResponse {
     pub version: String,
-    pub supported_formats: Vec<String>,
-    pub supported_languages: Vec<String>,
+    pub available_engines: Vec<EngineInfoResponse>,
+    pub default_engine: String,
     pub max_file_size_bytes: usize,
     pub default_language: String,
 }
 
 /// Run the HTTP server
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    let engine = OcrProcessor::new(&config)?;
+    let registry = EngineRegistry::new(&config)?;
     let addr = format!("{}:{}", config.host, config.port);
     let max_file_size = config.max_file_size;
 
+    tracing::info!(
+        "Available engines: {:?}",
+        registry.list()
+    );
+
     let state = AppState {
-        engine: Arc::new(engine),
+        registry: Arc::new(registry),
         config: Arc::new(config),
     };
 
     let app = Router::new()
         .route("/ocr", post(handle_ocr))
+        .route("/ocr/{engine}", post(handle_ocr_with_engine))
         .route("/health", get(handle_health))
         .route("/info", get(handle_info))
         .layer(DefaultBodyLimit::max(max_file_size))
@@ -74,12 +91,43 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Handle OCR requests
+/// Handle OCR requests (uses default engine)
 async fn handle_ocr(
     State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<OcrResponse>, OcrError> {
+    let engine = state.registry.default().ok_or_else(|| {
+        OcrError::InitializationError("No default engine available".to_string())
+    })?;
+
+    process_ocr_request(state, engine, multipart).await
+}
+
+/// Handle OCR requests with specific engine
+async fn handle_ocr_with_engine(
+    State(state): State<AppState>,
+    Path(engine_name): Path<String>,
+    multipart: Multipart,
+) -> Result<Json<OcrResponse>, OcrError> {
+    let engine = state.registry.get(&engine_name).ok_or_else(|| {
+        OcrError::InvalidRequest(format!(
+            "Unknown engine '{}'. Available engines: {:?}",
+            engine_name,
+            state.registry.list()
+        ))
+    })?;
+
+    process_ocr_request(state, engine, multipart).await
+}
+
+/// Common OCR processing logic
+async fn process_ocr_request(
+    state: AppState,
+    engine: Arc<dyn OcrEngine>,
     mut multipart: Multipart,
 ) -> Result<Json<OcrResponse>, OcrError> {
     let start = Instant::now();
+    let engine_name = engine.name().to_string();
 
     let mut file_data: Option<Bytes> = None;
     let mut content_type: Option<String> = None;
@@ -125,7 +173,7 @@ async fn handle_ocr(
 
     // Validate content type and get extension
     let mime = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
-    if !state.engine.supported_formats().contains(&mime) && !mime.starts_with("image/") {
+    if !engine.supported_formats().contains(&mime) && !mime.starts_with("image/") {
         tracing::warn!("Received file with content type: {}", mime);
     }
 
@@ -151,14 +199,15 @@ async fn handle_ocr(
         .write_all(&data)
         .map_err(|e| OcrError::Internal(format!("Failed to write temp file: {}", e)))?;
 
-    // Perform OCR (ocrs doesn't support language selection yet, it's English-only)
-    let _ = languages; // Ignore languages for now
-    let result = state.engine.process(temp_file.path())?;
+    // Perform OCR
+    let _ = languages; // TODO: Pass to engine if supported
+    let result = engine.process(temp_file.path())?;
 
     let processing_time_ms = start.elapsed().as_millis() as u64;
 
     tracing::info!(
-        "OCR completed in {}ms, confidence: {:.2}, text length: {}",
+        "[{}] OCR completed in {}ms, confidence: {:.2}, text length: {}",
+        engine_name,
         processing_time_ms,
         result.confidence,
         result.text.len()
@@ -169,6 +218,7 @@ async fn handle_ocr(
         confidence: result.confidence,
         processing_time_ms,
         warnings: result.warnings,
+        engine: engine_name,
     }))
 }
 
@@ -182,11 +232,22 @@ async fn handle_health() -> impl IntoResponse {
 
 /// Handle info requests
 async fn handle_info(State(state): State<AppState>) -> impl IntoResponse {
+    let engines: Vec<EngineInfoResponse> = state
+        .registry
+        .info()
+        .into_iter()
+        .map(|e| EngineInfoResponse {
+            name: e.name.to_string(),
+            description: e.description.to_string(),
+            supported_formats: e.supported_formats,
+            supported_languages: e.supported_languages,
+        })
+        .collect();
+
     Json(InfoResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        supported_formats: state.engine.supported_formats(),
-        // ocrs currently only supports English/Latin alphabet
-        supported_languages: vec!["eng".to_string()],
+        available_engines: engines,
+        default_engine: state.registry.default_name().to_string(),
         max_file_size_bytes: state.config.max_file_size,
         default_language: state.config.default_language.clone(),
     })

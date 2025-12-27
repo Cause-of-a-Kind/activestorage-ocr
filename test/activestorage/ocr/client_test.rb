@@ -100,4 +100,99 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
       @client.extract_text_from_file(file, "image/png", "test.png")
     end
   end
+
+  # Engine selection tests
+
+  def test_extract_text_from_file_uses_default_ocrs_endpoint
+    stub_request(:post, "#{@server_url}/ocr")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    file = StringIO.new("fake image data")
+    @client.extract_text_from_file(file, "image/png", "test.png")
+
+    assert_requested(:post, "#{@server_url}/ocr")
+  end
+
+  def test_extract_text_from_file_uses_leptess_endpoint_when_specified
+    stub_request(:post, "#{@server_url}/ocr/leptess")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    file = StringIO.new("fake image data")
+    @client.extract_text_from_file(file, "image/png", "test.png", engine: :leptess)
+
+    assert_requested(:post, "#{@server_url}/ocr/leptess")
+  end
+
+  def test_extract_text_from_file_uses_configured_engine
+    ActiveStorage::Ocr.configure do |config|
+      config.engine = :leptess
+    end
+
+    stub_request(:post, "#{@server_url}/ocr/leptess")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    client = ActiveStorage::Ocr::Client.new
+    file = StringIO.new("fake image data")
+    client.extract_text_from_file(file, "image/png", "test.png")
+
+    assert_requested(:post, "#{@server_url}/ocr/leptess")
+  end
+
+  def test_extract_text_from_file_per_request_engine_overrides_config
+    ActiveStorage::Ocr.configure do |config|
+      config.engine = :leptess
+    end
+
+    stub_request(:post, "#{@server_url}/ocr")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    client = ActiveStorage::Ocr::Client.new
+    file = StringIO.new("fake image data")
+    client.extract_text_from_file(file, "image/png", "test.png", engine: :ocrs)
+
+    assert_requested(:post, "#{@server_url}/ocr")
+  end
+
+  def test_extract_text_from_file_raises_on_invalid_engine
+    file = StringIO.new("fake image data")
+
+    assert_raises(ArgumentError) do
+      @client.extract_text_from_file(file, "image/png", "test.png", engine: :invalid)
+    end
+  end
+
+  def test_extract_text_from_file_returns_engine_in_result
+    response_with_engine = @success_response.merge(engine: "ocrs")
+    stub_request(:post, "#{@server_url}/ocr")
+      .to_return(status: 200, body: response_with_engine.to_json)
+
+    file = StringIO.new("fake image data")
+    result = @client.extract_text_from_file(file, "image/png", "test.png")
+
+    assert_equal "ocrs", result.engine
+  end
+
+  # Compare tests
+
+  def test_compare_from_path_calls_both_engines
+    stub_request(:post, "#{@server_url}/ocr")
+      .to_return(status: 200, body: @success_response.merge(engine: "ocrs").to_json)
+    stub_request(:post, "#{@server_url}/ocr/leptess")
+      .to_return(status: 200, body: @success_response.merge(engine: "leptess").to_json)
+
+    # Create a temporary file for the test
+    require "tempfile"
+    Tempfile.open(["test", ".png"]) do |f|
+      f.write("fake image data")
+      f.rewind
+
+      comparison = @client.compare_from_path(f.path, content_type: "image/png")
+
+      assert_instance_of Hash, comparison
+      assert comparison.key?(:ocrs)
+      assert comparison.key?(:leptess)
+      assert_equal "ocrs", comparison[:ocrs].engine
+      assert_equal "leptess", comparison[:leptess].engine
+    end
+  end
 end

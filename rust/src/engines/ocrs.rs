@@ -1,7 +1,13 @@
+//! OCRS engine implementation
+//!
+//! Pure Rust OCR engine using the ocrs library. No system dependencies required.
+//! Downloads neural network models automatically on first use.
+
 use crate::config::Config;
+use crate::engine::{OcrEngine, OcrResult};
 use crate::error::OcrError;
 use image::DynamicImage;
-use ocrs::{DecodeMethod, ImageSource, OcrEngine, OcrEngineParams};
+use ocrs::{DecodeMethod, ImageSource, OcrEngine as OcrsOcrEngine, OcrEngineParams};
 use rten::Model;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -14,23 +20,15 @@ const DETECTION_MODEL_URL: &str =
 const RECOGNITION_MODEL_URL: &str =
     "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten";
 
-/// OCR processing result
-#[derive(Debug, Clone)]
-pub struct OcrResult {
-    pub text: String,
-    pub confidence: f32,
-    pub warnings: Vec<String>,
-}
-
 /// OCR Engine wrapping the ocrs library
-pub struct OcrProcessor {
-    engine: Arc<OcrEngine>,
+pub struct OcrsEngine {
+    engine: Arc<OcrsOcrEngine>,
 }
 
-impl OcrProcessor {
+impl OcrsEngine {
     /// Create a new OCR processor, downloading models if needed
     pub fn new(_config: &Config) -> Result<Self, OcrError> {
-        tracing::info!("Initializing OCR engine...");
+        tracing::info!("Initializing ocrs OCR engine...");
 
         // Load models (will download if not cached)
         let detection_model_path =
@@ -46,7 +44,7 @@ impl OcrProcessor {
             OcrError::InitializationError(format!("Failed to load recognition model: {}", e))
         })?;
 
-        let engine = OcrEngine::new(OcrEngineParams {
+        let engine = OcrsOcrEngine::new(OcrEngineParams {
             detection_model: Some(detection_model),
             recognition_model: Some(recognition_model),
             decode_method: DecodeMethod::Greedy,
@@ -56,23 +54,11 @@ impl OcrProcessor {
             OcrError::InitializationError(format!("Failed to create OCR engine: {}", e))
         })?;
 
-        tracing::info!("OCR engine initialized successfully");
+        tracing::info!("ocrs engine initialized successfully");
 
         Ok(Self {
             engine: Arc::new(engine),
         })
-    }
-
-    /// Process a file (image or PDF) and return the extracted text
-    pub fn process<P: AsRef<Path>>(&self, file_path: P) -> Result<OcrResult, OcrError> {
-        let path = file_path.as_ref();
-
-        // Check if the file is a PDF
-        if is_pdf(path)? {
-            return self.process_pdf(path);
-        }
-
-        self.process_image(path)
     }
 
     /// Process an image file and return the extracted text
@@ -114,7 +100,6 @@ impl OcrProcessor {
             .map_err(|e| OcrError::ProcessingError(format!("Failed to recognize text: {}", e)))?;
 
         // Combine all lines into a single string
-        // TextWord implements Display, so we can use to_string()
         let text: String = line_texts
             .iter()
             .filter_map(|line| line.as_ref())
@@ -136,19 +121,6 @@ impl OcrProcessor {
             confidence,
             warnings,
         })
-    }
-
-    /// Get supported image formats
-    pub fn supported_formats(&self) -> Vec<String> {
-        vec![
-            "image/png".to_string(),
-            "image/jpeg".to_string(),
-            "image/gif".to_string(),
-            "image/bmp".to_string(),
-            "image/webp".to_string(),
-            "image/tiff".to_string(),
-            "application/pdf".to_string(),
-        ]
     }
 
     /// Process a PDF file
@@ -261,6 +233,46 @@ impl OcrProcessor {
         })
     }
 }
+
+impl OcrEngine for OcrsEngine {
+    fn name(&self) -> &'static str {
+        "ocrs"
+    }
+
+    fn description(&self) -> &'static str {
+        "Pure Rust OCR engine - fast, no system dependencies required"
+    }
+
+    fn process(&self, path: &Path) -> Result<OcrResult, OcrError> {
+        // Check if the file is a PDF
+        if is_pdf(path)? {
+            return self.process_pdf(path);
+        }
+
+        self.process_image(path)
+    }
+
+    fn supported_formats(&self) -> Vec<String> {
+        vec![
+            "image/png".to_string(),
+            "image/jpeg".to_string(),
+            "image/gif".to_string(),
+            "image/bmp".to_string(),
+            "image/webp".to_string(),
+            "image/tiff".to_string(),
+            "application/pdf".to_string(),
+        ]
+    }
+
+    fn supported_languages(&self) -> Vec<String> {
+        // ocrs currently only supports English/Latin alphabet
+        vec!["eng".to_string()]
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
 
 /// Check if a file is a PDF by reading its magic bytes
 fn is_pdf(path: &Path) -> Result<bool, OcrError> {
