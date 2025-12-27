@@ -19,14 +19,20 @@ module ActiveStorage
   # OCR support for Rails Active Storage attachments.
   #
   # This module provides optical character recognition (OCR) for files stored
-  # with Active Storage using a high-performance Rust server with the pure-Rust
-  # +ocrs+ OCR engine.
+  # with Active Storage using a high-performance Rust server.
+  #
+  # == OCR Engines
+  #
+  # Two engines are available:
+  # * +:ocrs+ - Pure Rust engine (default). Fast, no system dependencies.
+  # * +:leptess+ - Tesseract-based engine. Better for noisy/messy images.
   #
   # == Configuration
   #
   #   ActiveStorage::Ocr.configure do |config|
   #     config.server_url = "http://localhost:9292"
   #     config.timeout = 30
+  #     config.engine = :leptess  # Use Tesseract instead of default ocrs
   #   end
   #
   # == Basic Usage
@@ -35,6 +41,16 @@ module ActiveStorage
   #   result = ActiveStorage::Ocr.extract_text(document.file)
   #   result.text        # => "Extracted text..."
   #   result.confidence  # => 0.95
+  #   result.engine      # => "ocrs"
+  #
+  #   # Use a specific engine for one request
+  #   client = ActiveStorage::Ocr::Client.new
+  #   result = client.extract_text(document.file, engine: :leptess)
+  #
+  #   # Compare both engines
+  #   comparison = client.compare(document.file)
+  #   comparison[:ocrs].text      # => "Text from ocrs..."
+  #   comparison[:leptess].text   # => "Text from leptess..."
   #
   # == Error Handling
   #

@@ -3,16 +3,18 @@
 [![CI](https://github.com/Cause-of-a-Kind/activestorage-ocr/actions/workflows/ci.yml/badge.svg)](https://github.com/Cause-of-a-Kind/activestorage-ocr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-OCR for Rails Active Storage attachments, powered by Rust and [ocrs](https://github.com/robertknight/ocrs).
+OCR for Rails Active Storage attachments, powered by Rust.
 
 ## Overview
 
-`activestorage-ocr` provides optical character recognition (OCR) for files stored with Active Storage. It uses a high-performance Rust server with the pure-Rust `ocrs` OCR engine, eliminating the need for third-party OCR services or system-level dependencies.
+`activestorage-ocr` provides optical character recognition (OCR) for files stored with Active Storage. It uses a high-performance Rust server with your choice of OCR engine, eliminating the need for third-party OCR services.
 
 **Key Features:**
-- **Pure Rust** - No Tesseract or system dependencies required
-- **Self-contained** - Models download automatically on first run (~50MB)
-- **Fast** - Processes images in ~150ms
+- **Two OCR Engines** - Choose the right tool for the job:
+  - **ocrs** (default) - Pure Rust, no dependencies, fast (~150ms)
+  - **leptess** - Tesseract-based, better for noisy/messy images like phone photos
+- **Self-contained** - Pre-built binaries with no system dependencies
+- **Per-request engine selection** - Use different engines for different files
 - **Automatic** - OCR runs automatically when files are uploaded via Active Storage
 
 **Supported Formats:**
@@ -23,6 +25,13 @@ OCR for Rails Active Storage attachments, powered by Rust and [ocrs](https://git
 - **Rust server** handles CPU-intensive OCR processing
 - **Ruby gem** provides seamless Rails integration
 - Simple HTTP/JSON protocol for easy debugging
+
+### Choosing an Engine
+
+| Engine | Best For | Speed | Accuracy on Clean Images | Accuracy on Messy Images |
+|--------|----------|-------|--------------------------|--------------------------|
+| `ocrs` | Scanned documents, clean images | Fast (~150ms) | Excellent | Good |
+| `leptess` | Phone photos, noisy images, skewed text | Moderate (~300ms) | Excellent | Excellent |
 
 ## Requirements
 

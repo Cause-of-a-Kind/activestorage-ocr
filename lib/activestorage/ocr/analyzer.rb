@@ -15,6 +15,7 @@ module ActiveStorage
     # After analysis, blobs will have the following metadata:
     # * +ocr_text+ - The extracted text
     # * +ocr_confidence+ - Confidence score (0.0 to 1.0)
+    # * +ocr_engine+ - The OCR engine used ("ocrs" or "leptess")
     # * +ocr_processed_at+ - ISO 8601 timestamp
     #
     # == Example

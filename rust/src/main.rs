@@ -2,8 +2,9 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
+mod engine;
+mod engines;
 mod error;
-mod ocr;
 mod server;
 
 #[derive(Parser, Debug)]

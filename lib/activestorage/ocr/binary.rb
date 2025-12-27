@@ -20,10 +20,22 @@ module ActiveStorage
     # * linux-x86_64 (Linux x86_64)
     # * linux-aarch64 (Linux ARM64)
     #
+    # == Binary Variants
+    #
+    # * :ocrs - Pure Rust OCR engine only (~15MB, no system dependencies)
+    # * :leptess - Tesseract OCR engine only (~50-80MB, no system dependencies)
+    # * :all - Both engines included (~80-100MB)
+    #
     # == Usage
     #
-    #   # Install the binary for the current platform
+    #   # Install the default (ocrs) binary for the current platform
     #   ActiveStorage::Ocr::Binary.install!
+    #
+    #   # Install the leptess variant
+    #   ActiveStorage::Ocr::Binary.install!(variant: :leptess)
+    #
+    #   # Install all-engines variant
+    #   ActiveStorage::Ocr::Binary.install!(variant: :all)
     #
     #   # Check if binary is installed
     #   ActiveStorage::Ocr::Binary.installed?  # => true
@@ -37,6 +49,22 @@ module ActiveStorage
 
       # Name of the server binary.
       BINARY_NAME = "activestorage-ocr-server"
+
+      # Available binary variants with their download suffix and descriptions.
+      VARIANTS = {
+        ocrs: {
+          suffix: "",
+          description: "Pure Rust OCR engine (fast, no system dependencies)"
+        },
+        leptess: {
+          suffix: "-leptess",
+          description: "Tesseract OCR engine (better for messy images)"
+        },
+        all: {
+          suffix: "-all",
+          description: "All OCR engines included"
+        }
+      }.freeze
 
       class << self
         # Detects the current platform.
@@ -107,15 +135,45 @@ module ActiveStorage
           ActiveStorage::Ocr::VERSION
         end
 
-        # Returns the download URL for the current platform.
+        # Returns the download URL for the current platform and variant.
+        #
+        # ==== Parameters
+        #
+        # * +variant+ - The binary variant (:ocrs, :leptess, or :all)
         #
         # ==== Returns
         #
         # GitHub releases URL for the platform-specific tarball.
-        def download_url
+        def download_url(variant: :ocrs)
+          variant = variant.to_sym
+          validate_variant!(variant)
           tag = "v#{version}"
-          filename = "activestorage-ocr-server-#{platform}.tar.gz"
+          suffix = VARIANTS[variant][:suffix]
+          filename = "activestorage-ocr-server#{suffix}-#{platform}.tar.gz"
           "https://github.com/#{GITHUB_REPO}/releases/download/#{tag}/#{filename}"
+        end
+
+        # Lists available binary variants.
+        #
+        # ==== Returns
+        #
+        # Array of variant names.
+        def available_variants
+          VARIANTS.keys
+        end
+
+        # Returns info about a specific variant.
+        #
+        # ==== Parameters
+        #
+        # * +variant+ - The variant name (:ocrs, :leptess, or :all)
+        #
+        # ==== Returns
+        #
+        # Hash with :suffix and :description keys.
+        def variant_info(variant)
+          validate_variant!(variant)
+          VARIANTS[variant]
         end
 
         # Downloads and installs the binary.
@@ -126,6 +184,7 @@ module ActiveStorage
         #
         # * +force+ - If true, reinstalls even if already installed
         # * +path+ - Custom installation directory (defaults to gem's bin directory)
+        # * +variant+ - The binary variant to install (:ocrs, :leptess, or :all)
         #
         # ==== Returns
         #
@@ -134,7 +193,9 @@ module ActiveStorage
         # ==== Raises
         #
         # RuntimeError if the download fails.
-        def install!(force: false, path: nil)
+        # ArgumentError if an invalid variant is specified.
+        def install!(force: false, path: nil, variant: :ocrs)
+          validate_variant!(variant)
           target_dir = path || install_dir
           target_path = File.join(target_dir, BINARY_NAME)
 
@@ -145,15 +206,18 @@ module ActiveStorage
 
           FileUtils.mkdir_p(target_dir)
 
-          puts "Downloading activestorage-ocr-server for #{platform}..."
+          variant_desc = VARIANTS[variant][:description]
+          puts "Downloading activestorage-ocr-server (#{variant_desc}) for #{platform}..."
 
-          uri = URI(download_url)
+          url = download_url(variant: variant)
+          uri = URI(url)
           response = fetch_with_redirects(uri)
 
           unless response.is_a?(Net::HTTPSuccess)
+            feature_flag = variant == :ocrs ? "engine-ocrs" : (variant == :leptess ? "engine-leptess" : "all-engines")
             raise "Failed to download binary: #{response.code} #{response.message}\n" \
-                  "URL: #{download_url}\n" \
-                  "You may need to build from source: cd rust && cargo build --release"
+                  "URL: #{url}\n" \
+                  "You may need to build from source: cd rust && cargo build --release --features #{feature_flag}"
           end
 
           extract_binary(response.body, target_path)
@@ -162,6 +226,18 @@ module ActiveStorage
         end
 
         private
+
+        # Validates the variant parameter.
+        #
+        # ==== Raises
+        #
+        # ArgumentError if the variant is not valid.
+        def validate_variant!(variant)
+          variant = variant.to_sym
+          unless VARIANTS.key?(variant)
+            raise ArgumentError, "Invalid variant: #{variant}. Valid variants: #{VARIANTS.keys.join(', ')}"
+          end
+        end
 
         # Fetches a URL, following redirects.
         def fetch_with_redirects(uri, limit = 10)

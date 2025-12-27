@@ -27,6 +27,9 @@ module ActiveStorage
       # Array of warning messages from the OCR server.
       attr_reader :warnings
 
+      # The OCR engine that processed this result (e.g., "ocrs" or "leptess").
+      attr_reader :engine
+
       # Creates a new Result.
       #
       # ==== Parameters
@@ -35,11 +38,13 @@ module ActiveStorage
       # * +confidence+ - Confidence score (0.0 to 1.0)
       # * +processing_time_ms+ - Processing time in milliseconds
       # * +warnings+ - Array of warning messages (optional)
-      def initialize(text:, confidence:, processing_time_ms:, warnings: [])
+      # * +engine+ - The OCR engine used (optional)
+      def initialize(text:, confidence:, processing_time_ms:, warnings: [], engine: nil)
         @text = text
         @confidence = confidence
         @processing_time_ms = processing_time_ms
         @warnings = warnings
+        @engine = engine
       end
 
       # Returns whether OCR successfully extracted text.
@@ -61,7 +66,8 @@ module ActiveStorage
           text: text,
           confidence: confidence,
           processing_time_ms: processing_time_ms,
-          warnings: warnings
+          warnings: warnings,
+          engine: engine
         }
       end
 
@@ -71,11 +77,12 @@ module ActiveStorage
       #
       # ==== Returns
       #
-      # A Hash with +:ocr_text+, +:ocr_confidence+, and +:ocr_processed_at+.
+      # A Hash with +:ocr_text+, +:ocr_confidence+, +:ocr_engine+, and +:ocr_processed_at+.
       def to_metadata
         {
           ocr_text: text,
           ocr_confidence: confidence,
+          ocr_engine: engine,
           ocr_processed_at: Time.now.utc.iso8601
         }
       end
