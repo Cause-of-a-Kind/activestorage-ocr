@@ -1,6 +1,7 @@
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
 use std::fs;
+use std::net::TcpStream;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -58,8 +59,18 @@ impl TestServer {
             .spawn()
             .expect("Failed to start server");
 
-        // Wait for server to be ready
-        std::thread::sleep(Duration::from_secs(4));
+        // Wait for server to be ready by checking TCP connection
+        let addr = format!("127.0.0.1:{}", port);
+        let max_attempts = 30;
+        for attempt in 1..=max_attempts {
+            if TcpStream::connect(&addr).is_ok() {
+                break;
+            }
+            if attempt == max_attempts {
+                panic!("Server failed to start after {} attempts", max_attempts);
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
 
         Self { child, port }
     }
