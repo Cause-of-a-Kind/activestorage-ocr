@@ -30,11 +30,23 @@ module ActiveStorage
       # Defines rake tasks for server management.
       rake_tasks do
         namespace :activestorage_ocr do
-          desc "Install the OCR server binary (variant=ocrs|leptess|all, path=./bin/dist)"
+          desc "Install the OCR server binary (variant=ocrs|leptess|all, path=./bin/dist, source=local_binary_path)"
           task :install do
             path = ENV["path"]
             variant = (ENV["variant"] || "ocrs").to_sym
-            ActiveStorage::Ocr::Binary.install!(path: path, variant: variant)
+            source = ENV["source"]
+
+            if source
+              # Local development: copy from a local path instead of downloading
+              target_dir = path || ActiveStorage::Ocr::Binary.install_dir
+              target_path = File.join(target_dir, ActiveStorage::Ocr::Binary::BINARY_NAME)
+              FileUtils.mkdir_p(target_dir)
+              FileUtils.cp(source, target_path)
+              FileUtils.chmod(0o755, target_path)
+              puts "Copied #{source} to #{target_path}"
+            else
+              ActiveStorage::Ocr::Binary.install!(path: path, variant: variant)
+            end
           end
 
           desc "Check OCR server health"

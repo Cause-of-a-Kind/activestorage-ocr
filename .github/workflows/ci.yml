@@ -39,13 +39,31 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run Rust tests
+      - name: Run Rust tests (default features)
         working-directory: rust
         run: cargo test
 
-      - name: Build release binary
+      - name: Build release binary (default features)
         working-directory: rust
         run: cargo build --release
+
+  test-rust-all-engines:
+    name: Rust (all engines)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust tests (all engines)
+        working-directory: rust
+        run: cargo test --features all-engines -- --test-threads=1
+
+      - name: Build release binary (all engines)
+        working-directory: rust
+        run: cargo build --release --features all-engines
 
   integration-test:
     name: Integration Tests
@@ -103,6 +121,10 @@ jobs:
         working-directory: rust
         run: cargo fmt --check
 
-      - name: Run Clippy
+      - name: Run Clippy (default features)
         working-directory: rust
         run: cargo clippy -- -D warnings
+
+      - name: Run Clippy (all engines)
+        working-directory: rust
+        run: cargo clippy --features all-engines -- -D warnings

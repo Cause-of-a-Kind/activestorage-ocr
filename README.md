@@ -54,6 +54,18 @@ bundle install
 bin/rails activestorage_ocr:install
 ```
 
+By default, this installs the `ocrs` engine (pure Rust, ~15MB). To install with Tesseract support for better handling of noisy images:
+
+```bash
+# Install the all-engines variant (includes both ocrs and leptess/Tesseract)
+bin/rails activestorage_ocr:install variant=all
+
+# Or install only the Tesseract-based engine
+bin/rails activestorage_ocr:install variant=leptess
+```
+
+**No system dependencies required.** The Tesseract OCR engine and training data are statically linked into the binary.
+
 **3. Add the OCR server to your `Procfile.dev`:**
 
 ```procfile
@@ -120,6 +132,15 @@ result.confidence  # => 0.95
 
 # Extract text from an Active Storage attachment
 result = client.extract_text(document.file)
+
+# Per-request engine selection (requires all-engines variant)
+result = client.extract_text(document.file, engine: :ocrs)    # Fast, for clean images
+result = client.extract_text(document.file, engine: :leptess) # Tesseract, for noisy images
+
+# Compare engines side-by-side
+comparison = client.compare(document.file)
+comparison[:ocrs].confidence    # => 0.95
+comparison[:leptess].confidence # => 0.92
 ```
 
 ## Configuration
@@ -171,10 +192,11 @@ In your `Dockerfile`, run the generator during the build to install the binary:
 RUN bundle install
 
 # Install OCR server binary to bin/dist/
-RUN bundle exec rails activestorage_ocr:install path=./bin/dist
+# Use variant=all to include both ocrs and Tesseract engines
+RUN bundle exec rails activestorage_ocr:install variant=all path=./bin/dist
 
-# Alternatively, run the full generator:
-# RUN bundle exec rails generate activestorage_ocr:install
+# Or for the lighter ocrs-only variant (~15MB vs ~80MB):
+# RUN bundle exec rails activestorage_ocr:install path=./bin/dist
 ```
 
 Use foreman to manage both processes:
@@ -270,6 +292,12 @@ bin/rails activestorage_ocr:health
 # Install the OCR server binary for your platform
 bin/rails activestorage_ocr:install
 
+# Install with Tesseract support (all-engines variant)
+bin/rails activestorage_ocr:install variant=all
+
+# Install to a custom path
+bin/rails activestorage_ocr:install variant=all path=./bin/dist
+
 # Start the OCR server (for manual testing)
 bin/rails activestorage_ocr:start
 
@@ -278,6 +306,9 @@ bin/rails activestorage_ocr:health
 
 # Show binary info (platform, path, version)
 bin/rails activestorage_ocr:info
+
+# Compare both OCR engines on a file
+bin/rails activestorage_ocr:compare file=/path/to/image.png
 ```
 
 ## API Endpoints
@@ -287,8 +318,10 @@ The Rust server exposes these HTTP endpoints:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/info` | GET | Server info and supported formats |
-| `/ocr` | POST | Extract text from uploaded file |
+| `/info` | GET | Server info, available engines, and supported formats |
+| `/ocr` | POST | Extract text using default engine |
+| `/ocr/ocrs` | POST | Extract text using ocrs engine |
+| `/ocr/leptess` | POST | Extract text using Tesseract engine |
 
 ### Example with curl
 
@@ -296,8 +329,15 @@ The Rust server exposes these HTTP endpoints:
 # Health check
 curl http://localhost:9292/health
 
-# OCR an image
+# Server info (shows available engines)
+curl http://localhost:9292/info
+
+# OCR with default engine
 curl -X POST http://localhost:9292/ocr \
+  -F "file=@document.png;type=image/png"
+
+# OCR with specific engine (requires all-engines variant)
+curl -X POST http://localhost:9292/ocr/leptess \
   -F "file=@document.png;type=image/png"
 ```
 
@@ -306,11 +346,24 @@ curl -X POST http://localhost:9292/ocr \
 ### Building from source
 
 ```bash
-# Build the Rust server
+# Build with default engine (ocrs only)
 cd rust
 cargo build --release
 
+# Build with all engines (ocrs + Tesseract)
+cargo build --release --features all-engines
+
+# Build with specific engine only
+cargo build --release --features engine-leptess
+
 # The binary will be at rust/target/release/activestorage-ocr-server
+```
+
+For local development with a Rails app, you can install a locally-built binary:
+
+```bash
+# In your Rails app directory
+bin/rails activestorage_ocr:install source=/path/to/activestorage-ocr/rust/target/release/activestorage-ocr-server path=./bin/dist
 ```
 
 ### Running tests
@@ -319,8 +372,11 @@ cargo build --release
 # Ruby unit tests
 bundle exec rake test
 
-# Rust tests
+# Rust tests (default engine)
 cd rust && cargo test
+
+# Rust tests (all engines)
+cd rust && cargo test --features all-engines -- --test-threads=1
 
 # Integration tests (requires server running)
 cd rust && ./target/release/activestorage-ocr-server &

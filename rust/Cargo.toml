@@ -16,7 +16,7 @@ default = ["engine-ocrs"]
 
 # OCR Engine feature flags
 engine-ocrs = ["dep:ocrs", "dep:rten"]
-engine-leptess = ["dep:tesseract"]
+engine-leptess = ["dep:tesseract-static"]
 
 # Convenience: build with all engines
 all-engines = ["engine-ocrs", "engine-leptess"]
@@ -32,8 +32,8 @@ tower-http = { version = "0.5", features = ["cors", "limit", "trace"] }
 ocrs = { version = "0.9", optional = true }
 rten = { version = "0.13", optional = true }
 
-# OCR - Tesseract engine (requires system Tesseract library)
-tesseract = { version = "0.15", optional = true }
+# OCR - Tesseract engine (statically linked, no system dependencies)
+tesseract-static = { version = "0.2", optional = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

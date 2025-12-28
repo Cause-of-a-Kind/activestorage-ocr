@@ -1,20 +1,21 @@
 //! Leptess/Tesseract engine implementation
 //!
 //! Tesseract-based OCR engine. Better for noisy/messy images like phone photos.
-//! Uses tesseract crate with static linking when available.
+//! Uses tesseract-static crate for static linking (no system dependencies).
+//! Downloads tessdata (training data) automatically on first use.
 
 use crate::config::Config;
 use crate::engine::{OcrEngine, OcrResult};
 use crate::error::OcrError;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
-use tesseract::Tesseract;
+use tesseract_static::tesseract::Tesseract;
 
 /// Tesseract OCR Engine
 pub struct LeptessEngine {
-    /// Path to tessdata directory (or None to use system default)
-    tessdata_path: Option<String>,
+    /// Path to tessdata directory
+    tessdata_path: String,
     /// Default language for OCR
     default_language: String,
 }
@@ -22,15 +23,16 @@ pub struct LeptessEngine {
 impl LeptessEngine {
     /// Create a new Tesseract-based OCR engine
     pub fn new(config: &Config) -> Result<Self, OcrError> {
-        let tessdata_path = config.tessdata_path.clone();
         let default_language = config.default_language.clone();
+
+        // Ensure tessdata is available (download if needed)
+        let tessdata_path = ensure_tessdata_available(&default_language)?;
 
         // Validate that tessdata is accessible by doing a test initialization
         let test_tess =
-            Tesseract::new(tessdata_path.as_deref(), Some(&default_language)).map_err(|e| {
+            Tesseract::new(Some(&tessdata_path), Some(&default_language)).map_err(|e| {
                 OcrError::InitializationError(format!(
-                    "Failed to initialize Tesseract: {}. \
-                     Ensure tessdata is installed and TESSDATA_PREFIX is set correctly.",
+                    "Failed to initialize Tesseract: {}",
                     e
                 ))
             })?;
@@ -39,7 +41,7 @@ impl LeptessEngine {
         drop(test_tess);
 
         tracing::info!(
-            "Leptess engine initialized (tessdata: {:?}, language: {})",
+            "Leptess engine initialized (tessdata: {}, language: {})",
             tessdata_path,
             default_language
         );
@@ -52,16 +54,50 @@ impl LeptessEngine {
 
     /// Process an image file
     fn process_image(&self, path: &Path) -> Result<OcrResult, OcrError> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| OcrError::ProcessingError("Invalid path encoding".to_string()))?;
+        // Load image using the image crate
+        let img = image::open(path)
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to load image: {}", e)))?;
 
-        let mut tess = Tesseract::new(self.tessdata_path.as_deref(), Some(&self.default_language))
+        self.process_dynamic_image(&img)
+    }
+
+    /// Process a DynamicImage directly (used by both process_image and process_pdf)
+    fn process_dynamic_image(&self, img: &image::DynamicImage) -> Result<OcrResult, OcrError> {
+        // Convert to RGB8 for consistent handling
+        let rgb_img = img.to_rgb8();
+        let (width, height) = rgb_img.dimensions();
+
+        // Convert to BMP in memory (BMP is always supported by leptonica)
+        let mut bmp_data = Vec::new();
+        {
+            let mut cursor = std::io::Cursor::new(&mut bmp_data);
+            rgb_img
+                .write_to(&mut cursor, image::ImageFormat::Bmp)
+                .map_err(|e| {
+                    OcrError::ProcessingError(format!("Failed to convert to BMP: {}", e))
+                })?;
+        }
+
+        tracing::debug!(
+            "Processing image: {}x{}, BMP size: {} bytes",
+            width,
+            height,
+            bmp_data.len()
+        );
+
+        let mut tess = Tesseract::new(Some(&self.tessdata_path), Some(&self.default_language))
             .map_err(|e| OcrError::ProcessingError(format!("Failed to create Tesseract: {}", e)))?;
 
-        tess = tess
-            .set_image(path_str)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to set image: {}", e)))?;
+        // Use set_image_from_mem with BMP data
+        tess = tess.set_image_from_mem(&bmp_data).map_err(|e| {
+            OcrError::ProcessingError(format!(
+                "Failed to set image ({}x{}, {} bytes): {}",
+                width,
+                height,
+                bmp_data.len(),
+                e
+            ))
+        })?;
 
         tess = tess
             .recognize()
@@ -126,19 +162,8 @@ impl LeptessEngine {
         for (i, img) in images.iter().enumerate() {
             tracing::info!("Processing image {} of {} from PDF", i + 1, images.len());
 
-            // Save image to temp file for Tesseract
-            let temp_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()
-                .map_err(|e| {
-                    OcrError::ProcessingError(format!("Failed to create temp file: {}", e))
-                })?;
-
-            img.save(temp_file.path()).map_err(|e| {
-                OcrError::ProcessingError(format!("Failed to save temp image: {}", e))
-            })?;
-
-            match self.process_image(temp_file.path()) {
+            // Process the image directly without saving to temp file
+            match self.process_dynamic_image(img) {
                 Ok(result) => {
                     if !result.text.is_empty() {
                         all_text.push(result.text);
@@ -415,4 +440,74 @@ fn get_color_space(doc: &lopdf::Document, stream: &lopdf::Stream) -> String {
     }
 
     "DeviceRGB".to_string()
+}
+
+// ============================================================================
+// Tessdata download helpers
+// ============================================================================
+
+/// Ensure tessdata is available, downloading if needed
+fn ensure_tessdata_available(language: &str) -> Result<String, OcrError> {
+    // Get cache directory for tessdata
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("activestorage-ocr")
+        .join("tessdata");
+
+    std::fs::create_dir_all(&cache_dir).map_err(|e| {
+        OcrError::InitializationError(format!("Failed to create tessdata directory: {}", e))
+    })?;
+
+    let traineddata_file = format!("{}.traineddata", language);
+    let traineddata_path = cache_dir.join(&traineddata_file);
+
+    // Download if not cached
+    if !traineddata_path.exists() {
+        let url = tessdata_url(language);
+        tracing::info!(
+            "Downloading tessdata for '{}' (this may take a moment)...",
+            language
+        );
+        download_file(&url, &traineddata_path)?;
+        tracing::info!("Downloaded tessdata to {:?}", traineddata_path);
+    } else {
+        tracing::info!("Using cached tessdata from {:?}", cache_dir);
+    }
+
+    // Return the directory path (Tesseract expects the directory, not the file)
+    cache_dir
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| OcrError::InitializationError("Invalid tessdata path".to_string()))
+}
+
+/// Get tessdata download URL for a language
+fn tessdata_url(language: &str) -> String {
+    // Use tessdata_fast for smaller, faster downloads
+    format!(
+        "https://github.com/tesseract-ocr/tessdata_fast/raw/main/{}.traineddata",
+        language
+    )
+}
+
+/// Download a file from URL to path using ureq
+fn download_file(url: &str, path: &Path) -> Result<(), OcrError> {
+    let response = ureq::get(url)
+        .call()
+        .map_err(|e| OcrError::InitializationError(format!("Failed to download tessdata: {}", e)))?;
+
+    let mut file = File::create(path).map_err(|e| {
+        OcrError::InitializationError(format!("Failed to create tessdata file: {}", e))
+    })?;
+
+    // Read response body and write to file
+    let buffer = response.into_body().read_to_vec().map_err(|e| {
+        OcrError::InitializationError(format!("Failed to read tessdata response: {}", e))
+    })?;
+
+    file.write_all(&buffer).map_err(|e| {
+        OcrError::InitializationError(format!("Failed to write tessdata file: {}", e))
+    })?;
+
+    Ok(())
 }
