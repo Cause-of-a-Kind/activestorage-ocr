@@ -1,154 +1,117 @@
+//! Leptess/Tesseract engine implementation
+//!
+//! Tesseract-based OCR engine. Better for noisy/messy images like phone photos.
+//! Uses tesseract-static crate for static linking (no system dependencies).
+//! Downloads tessdata (training data) automatically on first use.
+
 use crate::config::Config;
+use crate::engine::{OcrEngine, OcrResult};
 use crate::error::OcrError;
-use image::DynamicImage;
-use ocrs::{DecodeMethod, ImageSource, OcrEngine, OcrEngineParams};
-use rten::Model;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use tesseract_static::tesseract::Tesseract;
 
-/// Default model URLs from the ocrs project
-const DETECTION_MODEL_URL: &str =
-    "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten";
-const RECOGNITION_MODEL_URL: &str =
-    "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten";
-
-/// OCR processing result
-#[derive(Debug, Clone)]
-pub struct OcrResult {
-    pub text: String,
-    pub confidence: f32,
-    pub warnings: Vec<String>,
+/// Tesseract OCR Engine
+pub struct LeptessEngine {
+    /// Path to tessdata directory
+    tessdata_path: String,
+    /// Default language for OCR
+    default_language: String,
 }
 
-/// OCR Engine wrapping the ocrs library
-pub struct OcrProcessor {
-    engine: Arc<OcrEngine>,
-}
+impl LeptessEngine {
+    /// Create a new Tesseract-based OCR engine
+    pub fn new(config: &Config) -> Result<Self, OcrError> {
+        let default_language = config.default_language.clone();
 
-impl OcrProcessor {
-    /// Create a new OCR processor, downloading models if needed
-    pub fn new(_config: &Config) -> Result<Self, OcrError> {
-        tracing::info!("Initializing OCR engine...");
+        // Ensure tessdata is available (download if needed)
+        let tessdata_path = ensure_tessdata_available(&default_language)?;
 
-        // Load models (will download if not cached)
-        let detection_model_path =
-            ensure_model_downloaded(DETECTION_MODEL_URL, "text-detection.rten")?;
-        let recognition_model_path =
-            ensure_model_downloaded(RECOGNITION_MODEL_URL, "text-recognition.rten")?;
+        // Validate that tessdata is accessible by doing a test initialization
+        let test_tess =
+            Tesseract::new(Some(&tessdata_path), Some(&default_language)).map_err(|e| {
+                OcrError::InitializationError(format!("Failed to initialize Tesseract: {}", e))
+            })?;
 
-        // Load models using rten::Model::load_file
-        let detection_model = Model::load_file(&detection_model_path).map_err(|e| {
-            OcrError::InitializationError(format!("Failed to load detection model: {}", e))
-        })?;
-        let recognition_model = Model::load_file(&recognition_model_path).map_err(|e| {
-            OcrError::InitializationError(format!("Failed to load recognition model: {}", e))
-        })?;
+        // Drop the test instance
+        drop(test_tess);
 
-        let engine = OcrEngine::new(OcrEngineParams {
-            detection_model: Some(detection_model),
-            recognition_model: Some(recognition_model),
-            decode_method: DecodeMethod::Greedy,
-            ..Default::default()
-        })
-        .map_err(|e| {
-            OcrError::InitializationError(format!("Failed to create OCR engine: {}", e))
-        })?;
-
-        tracing::info!("OCR engine initialized successfully");
+        tracing::info!(
+            "Leptess engine initialized (tessdata: {}, language: {})",
+            tessdata_path,
+            default_language
+        );
 
         Ok(Self {
-            engine: Arc::new(engine),
+            tessdata_path,
+            default_language,
         })
     }
 
-    /// Process a file (image or PDF) and return the extracted text
-    pub fn process<P: AsRef<Path>>(&self, file_path: P) -> Result<OcrResult, OcrError> {
-        let path = file_path.as_ref();
-
-        // Check if the file is a PDF
-        if is_pdf(path)? {
-            return self.process_pdf(path);
-        }
-
-        self.process_image(path)
-    }
-
-    /// Process an image file and return the extracted text
+    /// Process an image file
     fn process_image(&self, path: &Path) -> Result<OcrResult, OcrError> {
-        let warnings = Vec::new();
-
-        // Load the image using the image crate
+        // Load image using the image crate
         let img = image::open(path)
             .map_err(|e| OcrError::ProcessingError(format!("Failed to load image: {}", e)))?;
 
-        // Convert to RGB8 (HWC format, which is what ImageSource::from_bytes expects)
-        let rgb_img = img.into_rgb8();
-        let dimensions = rgb_img.dimensions();
-
-        // Create image source from raw bytes (HWC format)
-        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions).map_err(|e| {
-            OcrError::ProcessingError(format!("Failed to create image source: {}", e))
-        })?;
-
-        // Prepare input for OCR
-        let ocr_input = self
-            .engine
-            .prepare_input(img_source)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to prepare input: {}", e)))?;
-
-        // Detect words
-        let word_rects = self
-            .engine
-            .detect_words(&ocr_input)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to detect words: {}", e)))?;
-
-        // Group words into lines
-        let line_rects = self.engine.find_text_lines(&ocr_input, &word_rects);
-
-        // Recognize text in each line
-        let line_texts = self
-            .engine
-            .recognize_text(&ocr_input, &line_rects)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to recognize text: {}", e)))?;
-
-        // Combine all lines into a single string
-        // TextWord implements Display, so we can use to_string()
-        let text: String = line_texts
-            .iter()
-            .filter_map(|line| line.as_ref())
-            .map(|line| {
-                line.words()
-                    .map(|word| word.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // ocrs doesn't provide confidence scores per-character easily,
-        // so we'll use a placeholder for now
-        let confidence = if text.is_empty() { 0.0 } else { 0.85 };
-
-        Ok(OcrResult {
-            text,
-            confidence,
-            warnings,
-        })
+        self.process_dynamic_image(&img)
     }
 
-    /// Get supported image formats
-    pub fn supported_formats(&self) -> Vec<String> {
-        vec![
-            "image/png".to_string(),
-            "image/jpeg".to_string(),
-            "image/gif".to_string(),
-            "image/bmp".to_string(),
-            "image/webp".to_string(),
-            "image/tiff".to_string(),
-            "application/pdf".to_string(),
-        ]
+    /// Process a DynamicImage directly (used by both process_image and process_pdf)
+    fn process_dynamic_image(&self, img: &image::DynamicImage) -> Result<OcrResult, OcrError> {
+        // Convert to RGB8 for consistent handling
+        let rgb_img = img.to_rgb8();
+        let (width, height) = rgb_img.dimensions();
+
+        // Convert to BMP in memory (BMP is always supported by leptonica)
+        let mut bmp_data = Vec::new();
+        {
+            let mut cursor = std::io::Cursor::new(&mut bmp_data);
+            rgb_img
+                .write_to(&mut cursor, image::ImageFormat::Bmp)
+                .map_err(|e| {
+                    OcrError::ProcessingError(format!("Failed to convert to BMP: {}", e))
+                })?;
+        }
+
+        tracing::debug!(
+            "Processing image: {}x{}, BMP size: {} bytes",
+            width,
+            height,
+            bmp_data.len()
+        );
+
+        let mut tess = Tesseract::new(Some(&self.tessdata_path), Some(&self.default_language))
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to create Tesseract: {}", e)))?;
+
+        // Use set_image_from_mem with BMP data
+        tess = tess.set_image_from_mem(&bmp_data).map_err(|e| {
+            OcrError::ProcessingError(format!(
+                "Failed to set image ({}x{}, {} bytes): {}",
+                width,
+                height,
+                bmp_data.len(),
+                e
+            ))
+        })?;
+
+        tess = tess
+            .recognize()
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to recognize text: {}", e)))?;
+
+        let text = tess
+            .get_text()
+            .map_err(|e| OcrError::ProcessingError(format!("Failed to get text: {}", e)))?;
+
+        // Get confidence score (0-100 scale, convert to 0.0-1.0)
+        let confidence = tess.mean_text_conf() as f32 / 100.0;
+
+        Ok(OcrResult {
+            text: text.trim().to_string(),
+            confidence,
+            warnings: Vec::new(),
+        })
     }
 
     /// Process a PDF file
@@ -190,12 +153,19 @@ impl OcrProcessor {
 
         // OCR each image and combine results
         let mut all_text = Vec::new();
+        let mut total_confidence = 0.0;
+        let mut confidence_count = 0;
+
         for (i, img) in images.iter().enumerate() {
             tracing::info!("Processing image {} of {} from PDF", i + 1, images.len());
+
+            // Process the image directly without saving to temp file
             match self.process_dynamic_image(img) {
                 Ok(result) => {
                     if !result.text.is_empty() {
                         all_text.push(result.text);
+                        total_confidence += result.confidence;
+                        confidence_count += 1;
                     }
                 }
                 Err(e) => {
@@ -205,62 +175,74 @@ impl OcrProcessor {
         }
 
         let combined_text = all_text.join("\n\n");
-        let confidence = if combined_text.is_empty() { 0.0 } else { 0.75 };
+        let avg_confidence = if confidence_count > 0 {
+            total_confidence / confidence_count as f32
+        } else {
+            0.0
+        };
 
         Ok(OcrResult {
             text: combined_text,
-            confidence,
+            confidence: avg_confidence,
             warnings,
         })
     }
+}
 
-    /// Process a DynamicImage directly (used for extracted PDF images)
-    fn process_dynamic_image(&self, img: &DynamicImage) -> Result<OcrResult, OcrError> {
-        let rgb_img = img.to_rgb8();
-        let dimensions = rgb_img.dimensions();
+impl OcrEngine for LeptessEngine {
+    fn name(&self) -> &'static str {
+        "leptess"
+    }
 
-        let img_source = ImageSource::from_bytes(rgb_img.as_raw(), dimensions).map_err(|e| {
-            OcrError::ProcessingError(format!("Failed to create image source: {}", e))
-        })?;
+    fn description(&self) -> &'static str {
+        "Tesseract OCR engine - better for noisy/messy images like phone photos"
+    }
 
-        let ocr_input = self
-            .engine
-            .prepare_input(img_source)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to prepare input: {}", e)))?;
+    fn process(&self, path: &Path) -> Result<OcrResult, OcrError> {
+        // Check if the file is a PDF
+        if is_pdf(path)? {
+            return self.process_pdf(path);
+        }
 
-        let word_rects = self
-            .engine
-            .detect_words(&ocr_input)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to detect words: {}", e)))?;
+        self.process_image(path)
+    }
 
-        let line_rects = self.engine.find_text_lines(&ocr_input, &word_rects);
+    fn supported_formats(&self) -> Vec<String> {
+        vec![
+            "image/png".to_string(),
+            "image/jpeg".to_string(),
+            "image/gif".to_string(),
+            "image/bmp".to_string(),
+            "image/webp".to_string(),
+            "image/tiff".to_string(),
+            "application/pdf".to_string(),
+        ]
+    }
 
-        let line_texts = self
-            .engine
-            .recognize_text(&ocr_input, &line_rects)
-            .map_err(|e| OcrError::ProcessingError(format!("Failed to recognize text: {}", e)))?;
-
-        let text: String = line_texts
-            .iter()
-            .filter_map(|line| line.as_ref())
-            .map(|line| {
-                line.words()
-                    .map(|word| word.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let confidence = if text.is_empty() { 0.0 } else { 0.85 };
-
-        Ok(OcrResult {
-            text,
-            confidence,
-            warnings: Vec::new(),
-        })
+    fn supported_languages(&self) -> Vec<String> {
+        // Tesseract supports many languages - return common ones
+        // Users can install additional language packs
+        vec![
+            "eng".to_string(),     // English
+            "deu".to_string(),     // German
+            "fra".to_string(),     // French
+            "spa".to_string(),     // Spanish
+            "ita".to_string(),     // Italian
+            "por".to_string(),     // Portuguese
+            "nld".to_string(),     // Dutch
+            "jpn".to_string(),     // Japanese
+            "chi_sim".to_string(), // Chinese Simplified
+            "chi_tra".to_string(), // Chinese Traditional
+            "kor".to_string(),     // Korean
+            "ara".to_string(),     // Arabic
+            "rus".to_string(),     // Russian
+        ]
     }
 }
+
+// ============================================================================
+// Helper functions (shared with ocrs engine, could be moved to common module)
+// ============================================================================
 
 /// Check if a file is a PDF by reading its magic bytes
 fn is_pdf(path: &Path) -> Result<bool, OcrError> {
@@ -284,7 +266,7 @@ fn is_pdf(path: &Path) -> Result<bool, OcrError> {
 }
 
 /// Extract images from a PDF using lopdf
-fn extract_images_from_pdf(path: &Path) -> Result<Vec<DynamicImage>, OcrError> {
+fn extract_images_from_pdf(path: &Path) -> Result<Vec<image::DynamicImage>, OcrError> {
     use lopdf::Document;
 
     let doc = Document::load(path)
@@ -323,7 +305,7 @@ fn extract_images_from_pdf(path: &Path) -> Result<Vec<DynamicImage>, OcrError> {
 fn extract_image_from_stream(
     doc: &lopdf::Document,
     stream: &lopdf::Stream,
-) -> Result<DynamicImage, OcrError> {
+) -> Result<image::DynamicImage, OcrError> {
     // Get image dimensions
     let width = stream
         .dict
@@ -346,7 +328,7 @@ fn extract_image_from_stream(
         .decompressed_content()
         .map_err(|e| OcrError::ProcessingError(format!("Failed to decompress image: {}", e)))?;
 
-    // Get color space - handle both direct names and indirect references
+    // Get color space
     let color_space = get_color_space(doc, stream);
 
     // Get bits per component
@@ -357,15 +339,6 @@ fn extract_image_from_stream(
         .and_then(|b| b.as_i64().ok())
         .unwrap_or(8) as u8;
 
-    tracing::debug!(
-        "PDF image: {}x{}, {} bits, color_space={}, data_len={}",
-        width,
-        height,
-        bits_per_component,
-        color_space,
-        data.len()
-    );
-
     // Handle different color spaces
     match color_space.as_str() {
         "DeviceGray" => {
@@ -373,34 +346,28 @@ fn extract_image_from_stream(
                 let img = image::GrayImage::from_raw(width, height, data).ok_or_else(|| {
                     OcrError::ProcessingError("Invalid grayscale image data".to_string())
                 })?;
-                Ok(DynamicImage::ImageLuma8(img))
+                Ok(image::DynamicImage::ImageLuma8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
-                    "Unsupported grayscale format: {} bits, data_len={}, expected={}",
-                    bits_per_component,
-                    data.len(),
-                    width * height
+                    "Unsupported grayscale format: {} bits",
+                    bits_per_component
                 )))
             }
         }
         "DeviceRGB" | "ICCBased" => {
-            // ICCBased with 3 components is typically RGB
             if bits_per_component == 8 && data.len() >= (width * height * 3) as usize {
                 let img = image::RgbImage::from_raw(width, height, data).ok_or_else(|| {
                     OcrError::ProcessingError("Invalid RGB image data".to_string())
                 })?;
-                Ok(DynamicImage::ImageRgb8(img))
+                Ok(image::DynamicImage::ImageRgb8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
-                    "Unsupported RGB format: {} bits, data_len={}, expected={}",
-                    bits_per_component,
-                    data.len(),
-                    width * height * 3
+                    "Unsupported RGB format: {} bits",
+                    bits_per_component
                 )))
             }
         }
         "DeviceCMYK" => {
-            // Convert CMYK to RGB
             if bits_per_component == 8 && data.len() >= (width * height * 4) as usize {
                 let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
                 for chunk in data.chunks(4) {
@@ -420,13 +387,11 @@ fn extract_image_from_stream(
                 let img = image::RgbImage::from_raw(width, height, rgb_data).ok_or_else(|| {
                     OcrError::ProcessingError("Invalid CMYK->RGB conversion".to_string())
                 })?;
-                Ok(DynamicImage::ImageRgb8(img))
+                Ok(image::DynamicImage::ImageRgb8(img))
             } else {
                 Err(OcrError::ProcessingError(format!(
-                    "Unsupported CMYK format: {} bits, data_len={}, expected={}",
-                    bits_per_component,
-                    data.len(),
-                    width * height * 4
+                    "Unsupported CMYK format: {} bits",
+                    bits_per_component
                 )))
             }
         }
@@ -437,26 +402,22 @@ fn extract_image_from_stream(
     }
 }
 
-/// Get the color space name from a PDF stream, resolving indirect references
+/// Get the color space name from a PDF stream
 fn get_color_space(doc: &lopdf::Document, stream: &lopdf::Stream) -> String {
     let cs_obj = match stream.dict.get(b"ColorSpace") {
         Ok(obj) => obj,
         Err(_) => return "DeviceRGB".to_string(),
     };
 
-    // Handle direct name
     if let Ok(name) = cs_obj.as_name() {
         return String::from_utf8_lossy(name).to_string();
     }
 
-    // Handle indirect reference
     if let Ok(reference) = cs_obj.as_reference() {
         if let Ok(resolved) = doc.get_object(reference) {
-            // Could be a name
             if let Ok(name) = resolved.as_name() {
                 return String::from_utf8_lossy(name).to_string();
             }
-            // Could be an array like [/ICCBased ref]
             if let Ok(array) = resolved.as_array() {
                 if let Some(first) = array.first() {
                     if let Ok(name) = first.as_name() {
@@ -467,7 +428,6 @@ fn get_color_space(doc: &lopdf::Document, stream: &lopdf::Stream) -> String {
         }
     }
 
-    // Handle array directly (like [/ICCBased ref])
     if let Ok(array) = cs_obj.as_array() {
         if let Some(first) = array.first() {
             if let Ok(name) = first.as_name() {
@@ -479,48 +439,72 @@ fn get_color_space(doc: &lopdf::Document, stream: &lopdf::Stream) -> String {
     "DeviceRGB".to_string()
 }
 
-/// Ensure model is downloaded and return its path
-fn ensure_model_downloaded(url: &str, filename: &str) -> Result<std::path::PathBuf, OcrError> {
-    // Get cache directory
+// ============================================================================
+// Tessdata download helpers
+// ============================================================================
+
+/// Ensure tessdata is available, downloading if needed
+fn ensure_tessdata_available(language: &str) -> Result<String, OcrError> {
+    // Get cache directory for tessdata
     let cache_dir = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("activestorage-ocr");
+        .join("activestorage-ocr")
+        .join("tessdata");
 
     std::fs::create_dir_all(&cache_dir).map_err(|e| {
-        OcrError::InitializationError(format!("Failed to create cache directory: {}", e))
+        OcrError::InitializationError(format!("Failed to create tessdata directory: {}", e))
     })?;
 
-    let model_path = cache_dir.join(filename);
+    let traineddata_file = format!("{}.traineddata", language);
+    let traineddata_path = cache_dir.join(&traineddata_file);
 
     // Download if not cached
-    if !model_path.exists() {
-        tracing::info!("Downloading {} (this may take a moment)...", filename);
-        download_file(url, &model_path)?;
-        tracing::info!("Downloaded {} to {:?}", filename, model_path);
+    if !traineddata_path.exists() {
+        let url = tessdata_url(language);
+        tracing::info!(
+            "Downloading tessdata for '{}' (this may take a moment)...",
+            language
+        );
+        download_file(&url, &traineddata_path)?;
+        tracing::info!("Downloaded tessdata to {:?}", traineddata_path);
     } else {
-        tracing::info!("Using cached model from {:?}", model_path);
+        tracing::info!("Using cached tessdata from {:?}", cache_dir);
     }
 
-    Ok(model_path)
+    // Return the directory path (Tesseract expects the directory, not the file)
+    cache_dir
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| OcrError::InitializationError("Invalid tessdata path".to_string()))
+}
+
+/// Get tessdata download URL for a language
+fn tessdata_url(language: &str) -> String {
+    // Use tessdata_fast for smaller, faster downloads
+    format!(
+        "https://github.com/tesseract-ocr/tessdata_fast/raw/main/{}.traineddata",
+        language
+    )
 }
 
 /// Download a file from URL to path using ureq
 fn download_file(url: &str, path: &Path) -> Result<(), OcrError> {
-    let response = ureq::get(url)
-        .call()
-        .map_err(|e| OcrError::InitializationError(format!("Failed to download model: {}", e)))?;
+    let response = ureq::get(url).call().map_err(|e| {
+        OcrError::InitializationError(format!("Failed to download tessdata: {}", e))
+    })?;
 
     let mut file = File::create(path).map_err(|e| {
-        OcrError::InitializationError(format!("Failed to create model file: {}", e))
+        OcrError::InitializationError(format!("Failed to create tessdata file: {}", e))
     })?;
 
     // Read response body and write to file
     let buffer = response.into_body().read_to_vec().map_err(|e| {
-        OcrError::InitializationError(format!("Failed to read response body: {}", e))
+        OcrError::InitializationError(format!("Failed to read tessdata response: {}", e))
     })?;
 
-    file.write_all(&buffer)
-        .map_err(|e| OcrError::InitializationError(format!("Failed to write model file: {}", e)))?;
+    file.write_all(&buffer).map_err(|e| {
+        OcrError::InitializationError(format!("Failed to write tessdata file: {}", e))
+    })?;
 
     Ok(())
 }

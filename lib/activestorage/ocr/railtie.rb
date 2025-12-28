@@ -13,6 +13,7 @@ module ActiveStorage
     # * +activestorage_ocr:start+ - Start the OCR server
     # * +activestorage_ocr:health+ - Check if the server is responding
     # * +activestorage_ocr:info+ - Show binary and platform information
+    # * +activestorage_ocr:compare+ - Compare OCR results from different engines
     #
     class Railtie < Rails::Railtie
       # Registers the OCR analyzer with Active Storage.
@@ -29,10 +30,23 @@ module ActiveStorage
       # Defines rake tasks for server management.
       rake_tasks do
         namespace :activestorage_ocr do
-          desc "Install the OCR server binary (optional: path=./bin/dist)"
+          desc "Install the OCR server binary (variant=ocrs|leptess|all, path=./bin/dist, source=local_binary_path)"
           task :install do
             path = ENV["path"]
-            ActiveStorage::Ocr::Binary.install!(path: path)
+            variant = (ENV["variant"] || "ocrs").to_sym
+            source = ENV["source"]
+
+            if source
+              # Local development: copy from a local path instead of downloading
+              target_dir = path || ActiveStorage::Ocr::Binary.install_dir
+              target_path = File.join(target_dir, ActiveStorage::Ocr::Binary::BINARY_NAME)
+              FileUtils.mkdir_p(target_dir)
+              FileUtils.cp(source, target_path)
+              FileUtils.chmod(0o755, target_path)
+              puts "Copied #{source} to #{target_path}"
+            else
+              ActiveStorage::Ocr::Binary.install!(path: path, variant: variant)
+            end
           end
 
           desc "Check OCR server health"
@@ -42,7 +56,11 @@ module ActiveStorage
               puts "OCR server is healthy"
               info = client.server_info
               puts "  Version: #{info[:version]}"
-              puts "  Supported formats: #{info[:supported_formats].join(', ')}"
+              puts "  Default engine: #{info[:default_engine]}"
+              puts "  Available engines:"
+              info[:available_engines].each do |engine|
+                puts "    - #{engine[:name]}: #{engine[:description]}"
+              end
             else
               puts "OCR server is not responding"
               exit 1
@@ -54,7 +72,8 @@ module ActiveStorage
             binary = ActiveStorage::Ocr::Binary.binary_path
             unless File.executable?(binary)
               puts "Binary not found. Installing..."
-              ActiveStorage::Ocr::Binary.install!
+              variant = (ENV["variant"] || "ocrs").to_sym
+              ActiveStorage::Ocr::Binary.install!(variant: variant)
             end
 
             config = ActiveStorage::Ocr.configuration
@@ -72,6 +91,59 @@ module ActiveStorage
             puts "Binary path: #{ActiveStorage::Ocr::Binary.binary_path}"
             puts "Installed: #{ActiveStorage::Ocr::Binary.installed?}"
             puts "Version: #{ActiveStorage::Ocr::Binary.version}"
+            puts ""
+            puts "Available variants:"
+            ActiveStorage::Ocr::Binary::VARIANTS.each do |name, info|
+              puts "  #{name}: #{info[:description]}"
+            end
+          end
+
+          desc "Compare OCR engines on a file (file=/path/to/image.png)"
+          task compare: :environment do
+            file_path = ENV["file"]
+            unless file_path
+              puts "Usage: rake activestorage_ocr:compare file=/path/to/image.png"
+              exit 1
+            end
+
+            unless File.exist?(file_path)
+              puts "File not found: #{file_path}"
+              exit 1
+            end
+
+            client = ActiveStorage::Ocr::Client.new
+            puts "Comparing OCR engines on: #{file_path}"
+            puts ""
+
+            begin
+              comparison = client.compare_from_path(file_path)
+
+              comparison.each do |engine, result|
+                puts "#{engine.to_s.upcase}:"
+                puts "  Text length: #{result.text.length} characters"
+                puts "  Confidence: #{(result.confidence * 100).round(1)}%"
+                puts "  Processing time: #{result.processing_time_ms}ms"
+                if result.warnings.any?
+                  puts "  Warnings: #{result.warnings.join(', ')}"
+                end
+                puts ""
+              end
+
+              # Summary
+              faster = comparison.min_by { |_, r| r.processing_time_ms }
+              higher_conf = comparison.max_by { |_, r| r.confidence }
+              puts "Summary:"
+              puts "  Faster engine: #{faster[0]} (#{faster[1].processing_time_ms}ms)"
+              puts "  Higher confidence: #{higher_conf[0]} (#{(higher_conf[1].confidence * 100).round(1)}%)"
+            rescue ActiveStorage::Ocr::ConnectionError => e
+              puts "Error: #{e.message}"
+              puts "Make sure the OCR server is running with both engines enabled."
+              exit 1
+            rescue ActiveStorage::Ocr::ServerError => e
+              puts "Server error: #{e.message}"
+              puts "This engine may not be available. Check server configuration."
+              exit 1
+            end
           end
         end
       end

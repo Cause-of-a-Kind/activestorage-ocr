@@ -1,6 +1,6 @@
 [package]
 name = "activestorage-ocr-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "High-performance OCR server for ActiveStorage-OCR gem"
 license = "MIT"
@@ -10,6 +10,17 @@ repository = "https://github.com/yourorg/activestorage-ocr"
 name = "activestorage-ocr-server"
 path = "src/main.rs"
 
+[features]
+# Default: only ocrs engine (pure Rust, no system dependencies)
+default = ["engine-ocrs"]
+
+# OCR Engine feature flags
+engine-ocrs = ["dep:ocrs", "dep:rten"]
+engine-leptess = ["dep:tesseract-static"]
+
+# Convenience: build with all engines
+all-engines = ["engine-ocrs", "engine-leptess"]
+
 [dependencies]
 # HTTP server
 axum = { version = "0.7", features = ["multipart"] }
@@ -17,9 +28,12 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["cors", "limit", "trace"] }
 
-# OCR - pure Rust, no system dependencies!
-ocrs = "0.9"
-rten = "0.13"  # Must match ocrs's rten version
+# OCR - ocrs engine (pure Rust, no system dependencies)
+ocrs = { version = "0.9", optional = true }
+rten = { version = "0.13", optional = true }
+
+# OCR - Tesseract engine (statically linked, no system dependencies)
+tesseract-static = { version = "0.2", optional = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
