@@ -11,8 +11,8 @@ OCR for Rails Active Storage attachments, powered by Rust.
 
 **Key Features:**
 - **Two OCR Engines** - Choose the right tool for the job:
-  - **ocrs** (default) - Pure Rust, no dependencies, fast (~150ms)
-  - **leptess** - Tesseract-based, better for noisy/messy images like phone photos
+  - **ocrs** (default) - Pure Rust, zero system dependencies
+  - **leptess** - Tesseract-based, statically linked (no system Tesseract needed)
 - **Self-contained** - Pre-built binaries with no system dependencies
 - **Per-request engine selection** - Use different engines for different files
 - **Automatic** - OCR runs automatically when files are uploaded via Active Storage
@@ -28,10 +28,21 @@ OCR for Rails Active Storage attachments, powered by Rust.
 
 ### Choosing an Engine
 
-| Engine | Best For | Speed | Accuracy on Clean Images | Accuracy on Messy Images |
-|--------|----------|-------|--------------------------|--------------------------|
-| `ocrs` | Scanned documents, clean images | Fast (~150ms) | Excellent | Good |
-| `leptess` | Phone photos, noisy images, skewed text | Moderate (~300ms) | Excellent | Excellent |
+| Engine | Binary Size | Notes |
+|--------|-------------|-------|
+| `ocrs` | ~9 MB | Pure Rust, modern neural network approach |
+| `leptess` | ~13 MB | Tesseract-based, well-established OCR engine |
+| `all` | ~15 MB | Includes both engines for comparison |
+
+**Which engine should I use?**
+
+Start with `ocrs` (the default). It works well for most documents and has a smaller binary. If results aren't satisfactory, try `leptess`—it uses Tesseract, a mature OCR engine that's been around for decades.
+
+Neither engine is universally better—performance varies by image. The `all` variant lets you compare both engines on your actual documents to see which works best for your use case.
+
+**Platform Support:**
+- **Linux (x86_64):** Fully supported
+- **macOS / Windows:** ocrs-only variant works; Tesseract variants require building from source
 
 ## Requirements
 
@@ -54,10 +65,10 @@ bundle install
 bin/rails activestorage_ocr:install
 ```
 
-By default, this installs the `ocrs` engine (pure Rust, ~15MB). To install with Tesseract support for better handling of noisy images:
+By default, this installs the `ocrs` engine (~9 MB binary). To install with Tesseract support:
 
 ```bash
-# Install the all-engines variant (includes both ocrs and leptess/Tesseract)
+# Install both engines (recommended for comparing results)
 bin/rails activestorage_ocr:install variant=all
 
 # Or install only the Tesseract-based engine
@@ -134,8 +145,8 @@ result.confidence  # => 0.95
 result = client.extract_text(document.file)
 
 # Per-request engine selection (requires all-engines variant)
-result = client.extract_text(document.file, engine: :ocrs)    # Fast, for clean images
-result = client.extract_text(document.file, engine: :leptess) # Tesseract, for noisy images
+result = client.extract_text(document.file, engine: :ocrs)    # Pure Rust engine
+result = client.extract_text(document.file, engine: :leptess) # Tesseract engine
 
 # Compare engines side-by-side
 comparison = client.compare(document.file)
@@ -192,10 +203,10 @@ In your `Dockerfile`, run the generator during the build to install the binary:
 RUN bundle install
 
 # Install OCR server binary to bin/dist/
-# Use variant=all to include both ocrs and Tesseract engines
+# Use variant=all to include both ocrs and Tesseract engines (~15 MB)
 RUN bundle exec rails activestorage_ocr:install variant=all path=./bin/dist
 
-# Or for the lighter ocrs-only variant (~15MB vs ~80MB):
+# Or for the smaller ocrs-only variant (~9 MB):
 # RUN bundle exec rails activestorage_ocr:install path=./bin/dist
 ```
 

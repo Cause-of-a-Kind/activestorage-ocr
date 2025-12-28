@@ -31,10 +31,7 @@ impl LeptessEngine {
         // Validate that tessdata is accessible by doing a test initialization
         let test_tess =
             Tesseract::new(Some(&tessdata_path), Some(&default_language)).map_err(|e| {
-                OcrError::InitializationError(format!(
-                    "Failed to initialize Tesseract: {}",
-                    e
-                ))
+                OcrError::InitializationError(format!("Failed to initialize Tesseract: {}", e))
             })?;
 
         // Drop the test instance
@@ -492,9 +489,9 @@ fn tessdata_url(language: &str) -> String {
 
 /// Download a file from URL to path using ureq
 fn download_file(url: &str, path: &Path) -> Result<(), OcrError> {
-    let response = ureq::get(url)
-        .call()
-        .map_err(|e| OcrError::InitializationError(format!("Failed to download tessdata: {}", e)))?;
+    let response = ureq::get(url).call().map_err(|e| {
+        OcrError::InitializationError(format!("Failed to download tessdata: {}", e))
+    })?;
 
     let mut file = File::create(path).map_err(|e| {
         OcrError::InitializationError(format!("Failed to create tessdata file: {}", e))
