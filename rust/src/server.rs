@@ -234,15 +234,14 @@ async fn process_ocr_request(
         (result, None) // No preprocessing for PDFs
     } else {
         // For images, load and preprocess before OCR
-        let image = image::load_from_memory(&data).map_err(|e| {
-            OcrError::PreprocessingError(format!("Failed to load image: {}", e))
-        })?;
+        let image = image::load_from_memory(&data)
+            .map_err(|e| OcrError::PreprocessingError(format!("Failed to load image: {}", e)))?;
 
         // Apply preprocessing
         let pipeline = Pipeline::new(preset);
-        let preprocess_result = pipeline.process(image).map_err(|e| {
-            OcrError::PreprocessingError(format!("Preprocessing failed: {}", e))
-        })?;
+        let preprocess_result = pipeline
+            .process(image)
+            .map_err(|e| OcrError::PreprocessingError(format!("Preprocessing failed: {}", e)))?;
 
         // Perform OCR on preprocessed image
         let result = engine.process_image(&preprocess_result.image)?;

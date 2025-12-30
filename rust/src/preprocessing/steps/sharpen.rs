@@ -23,13 +23,7 @@ mod tests {
     #[test]
     fn test_sharpen_enhances_edges() {
         // Create image with an edge (left half dark, right half light)
-        let img = GrayImage::from_fn(20, 10, |x, _| {
-            if x < 10 {
-                Luma([50])
-            } else {
-                Luma([200])
-            }
-        });
+        let img = GrayImage::from_fn(20, 10, |x, _| if x < 10 { Luma([50]) } else { Luma([200]) });
 
         let result = apply(DynamicImage::ImageLuma8(img.clone())).unwrap();
         let result_gray = result.to_luma8();

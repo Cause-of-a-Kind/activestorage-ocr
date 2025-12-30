@@ -53,8 +53,7 @@ fn compute_integral_images(img: &GrayImage) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let val = img.get_pixel(x as u32, y as u32).0[0] as f64;
-            integral[y + 1][x + 1] =
-                val + integral[y][x + 1] + integral[y + 1][x] - integral[y][x];
+            integral[y + 1][x + 1] = val + integral[y][x + 1] + integral[y + 1][x] - integral[y][x];
             integral_sq[y + 1][x + 1] =
                 val * val + integral_sq[y][x + 1] + integral_sq[y + 1][x] - integral_sq[y][x];
         }
