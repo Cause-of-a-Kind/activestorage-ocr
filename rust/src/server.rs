@@ -2,15 +2,15 @@ use crate::config::Config;
 use crate::engine::OcrEngine;
 use crate::engines::EngineRegistry;
 use crate::error::OcrError;
+use crate::preprocessing::{Pipeline, Preset, StepTiming};
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
-use serde::Serialize;
-use std::io::Write;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::trace::TraceLayer;
@@ -22,6 +22,22 @@ pub struct AppState {
     pub config: Arc<Config>,
 }
 
+/// Query parameters for OCR requests
+#[derive(Debug, Deserialize, Default)]
+pub struct OcrQueryParams {
+    /// Preprocessing preset: none, minimal, default, aggressive
+    #[serde(default)]
+    pub preprocess: Option<String>,
+}
+
+/// Preprocessing statistics for response
+#[derive(Serialize)]
+pub struct PreprocessingStats {
+    pub preset: String,
+    pub total_time_ms: u64,
+    pub steps: Vec<StepTiming>,
+}
+
 /// OCR response
 #[derive(Serialize)]
 pub struct OcrResponse {
@@ -30,6 +46,9 @@ pub struct OcrResponse {
     pub processing_time_ms: u64,
     pub warnings: Vec<String>,
     pub engine: String,
+    /// Preprocessing statistics (null if preprocess=none)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preprocessing: Option<PreprocessingStats>,
 }
 
 /// Engine info for /info response
@@ -91,6 +110,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 /// Handle OCR requests (uses default engine)
 async fn handle_ocr(
     State(state): State<AppState>,
+    Query(params): Query<OcrQueryParams>,
     multipart: Multipart,
 ) -> Result<Json<OcrResponse>, OcrError> {
     let engine = state
@@ -98,13 +118,14 @@ async fn handle_ocr(
         .default()
         .ok_or_else(|| OcrError::InitializationError("No default engine available".to_string()))?;
 
-    process_ocr_request(state, engine, multipart).await
+    process_ocr_request(state, engine, multipart, params).await
 }
 
 /// Handle OCR requests with specific engine
 async fn handle_ocr_with_engine(
     State(state): State<AppState>,
     Path(engine_name): Path<String>,
+    Query(params): Query<OcrQueryParams>,
     multipart: Multipart,
 ) -> Result<Json<OcrResponse>, OcrError> {
     let engine = state.registry.get(&engine_name).ok_or_else(|| {
@@ -115,7 +136,7 @@ async fn handle_ocr_with_engine(
         ))
     })?;
 
-    process_ocr_request(state, engine, multipart).await
+    process_ocr_request(state, engine, multipart, params).await
 }
 
 /// Common OCR processing logic
@@ -123,6 +144,7 @@ async fn process_ocr_request(
     state: AppState,
     engine: Arc<dyn OcrEngine>,
     mut multipart: Multipart,
+    params: OcrQueryParams,
 ) -> Result<Json<OcrResponse>, OcrError> {
     let start = Instant::now();
     let engine_name = engine.name().to_string();
@@ -169,44 +191,88 @@ async fn process_ocr_request(
         });
     }
 
-    // Validate content type and get extension
+    // Validate content type
     let mime = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
     if !engine.supported_formats().contains(&mime) && !mime.starts_with("image/") {
         tracing::warn!("Received file with content type: {}", mime);
     }
 
-    // Determine file extension from mime type
-    let extension = match mime.as_str() {
-        "image/png" => ".png",
-        "image/jpeg" => ".jpg",
-        "image/gif" => ".gif",
-        "image/bmp" => ".bmp",
-        "image/webp" => ".webp",
-        "image/tiff" => ".tiff",
-        "application/pdf" => ".pdf",
-        _ => ".tmp",
-    };
+    // Determine preprocessing preset (default to "default" if not specified)
+    let preset = params
+        .preprocess
+        .as_deref()
+        .map(|s| {
+            Preset::from_str(s).ok_or_else(|| {
+                OcrError::InvalidRequest(format!(
+                    "Unknown preprocessing preset '{}'. Valid: none, minimal, default, aggressive",
+                    s
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(Preset::Default);
 
-    // Write to temp file with proper extension
-    let mut temp_file = tempfile::Builder::new()
-        .suffix(extension)
-        .tempfile()
-        .map_err(|e| OcrError::Internal(format!("Failed to create temp file: {}", e)))?;
-
-    temp_file
-        .write_all(&data)
-        .map_err(|e| OcrError::Internal(format!("Failed to write temp file: {}", e)))?;
-
-    // Perform OCR
     let _ = languages; // TODO: Pass to engine if supported
-    let result = engine.process(temp_file.path())?;
+
+    // Handle PDFs separately (they need file-based processing)
+    let is_pdf = mime == "application/pdf" || data.starts_with(b"%PDF-");
+
+    let (result, preprocessing_stats) = if is_pdf {
+        // For PDFs, write to temp file and use path-based processing
+        use std::io::Write;
+
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(".pdf")
+            .tempfile()
+            .map_err(|e| OcrError::Internal(format!("Failed to create temp file: {}", e)))?;
+
+        temp_file
+            .write_all(&data)
+            .map_err(|e| OcrError::Internal(format!("Failed to write temp file: {}", e)))?;
+
+        let result = engine.process(temp_file.path())?;
+        (result, None) // No preprocessing for PDFs
+    } else {
+        // For images, load and preprocess before OCR
+        let image = image::load_from_memory(&data).map_err(|e| {
+            OcrError::PreprocessingError(format!("Failed to load image: {}", e))
+        })?;
+
+        // Apply preprocessing
+        let pipeline = Pipeline::new(preset);
+        let preprocess_result = pipeline.process(image).map_err(|e| {
+            OcrError::PreprocessingError(format!("Preprocessing failed: {}", e))
+        })?;
+
+        // Perform OCR on preprocessed image
+        let result = engine.process_image(&preprocess_result.image)?;
+
+        // Build preprocessing stats for response
+        let stats = if preset != Preset::None {
+            Some(PreprocessingStats {
+                preset: preprocess_result.preset,
+                total_time_ms: preprocess_result.total_time_ms,
+                steps: preprocess_result.steps,
+            })
+        } else {
+            None
+        };
+
+        (result, stats)
+    };
 
     let processing_time_ms = start.elapsed().as_millis() as u64;
 
+    let preprocess_time = preprocessing_stats
+        .as_ref()
+        .map(|s| s.total_time_ms)
+        .unwrap_or(0);
+
     tracing::info!(
-        "[{}] OCR completed in {}ms, confidence: {:.2}, text length: {}",
+        "[{}] OCR completed in {}ms (preprocessing: {}ms), confidence: {:.2}, text length: {}",
         engine_name,
         processing_time_ms,
+        preprocess_time,
         result.confidence,
         result.text.len()
     );
@@ -217,6 +283,7 @@ async fn process_ocr_request(
         processing_time_ms,
         warnings: result.warnings,
         engine: engine_name,
+        preprocessing: preprocessing_stats,
     }))
 }
 

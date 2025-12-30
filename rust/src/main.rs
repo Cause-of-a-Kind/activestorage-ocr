@@ -5,6 +5,7 @@ mod config;
 mod engine;
 mod engines;
 mod error;
+mod preprocessing;
 mod server;
 
 #[derive(Parser, Debug)]

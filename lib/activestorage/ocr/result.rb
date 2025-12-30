@@ -30,6 +30,10 @@ module ActiveStorage
       # The OCR engine that processed this result (e.g., "ocrs" or "leptess").
       attr_reader :engine
 
+      # Preprocessing statistics (Hash with :preset, :total_time_ms, :steps).
+      # nil if preprocessing was skipped.
+      attr_reader :preprocessing
+
       # Creates a new Result.
       #
       # ==== Parameters
@@ -39,12 +43,14 @@ module ActiveStorage
       # * +processing_time_ms+ - Processing time in milliseconds
       # * +warnings+ - Array of warning messages (optional)
       # * +engine+ - The OCR engine used (optional)
-      def initialize(text:, confidence:, processing_time_ms:, warnings: [], engine: nil)
+      # * +preprocessing+ - Preprocessing stats hash (optional)
+      def initialize(text:, confidence:, processing_time_ms:, warnings: [], engine: nil, preprocessing: nil)
         @text = text
         @confidence = confidence
         @processing_time_ms = processing_time_ms
         @warnings = warnings
         @engine = engine
+        @preprocessing = preprocessing
       end
 
       # Returns whether OCR successfully extracted text.
@@ -54,6 +60,16 @@ module ActiveStorage
       # +true+ if text was extracted, +false+ if text is nil or empty.
       def success?
         !text.nil? && !text.empty?
+      end
+
+      # Returns the preprocessing time in milliseconds, or 0 if not preprocessed.
+      def preprocessing_time_ms
+        preprocessing&.dig(:total_time_ms) || 0
+      end
+
+      # Returns the preprocessing preset used, or nil if not preprocessed.
+      def preprocessing_preset
+        preprocessing&.dig(:preset)
       end
 
       # Converts the result to a Hash.
@@ -67,7 +83,8 @@ module ActiveStorage
           confidence: confidence,
           processing_time_ms: processing_time_ms,
           warnings: warnings,
-          engine: engine
+          engine: engine,
+          preprocessing: preprocessing
         }
       end
 

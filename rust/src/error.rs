@@ -14,6 +14,9 @@ pub enum OcrError {
     #[error("Failed to process image: {0}")]
     ProcessingError(String),
 
+    #[error("Preprocessing failed: {0}")]
+    PreprocessingError(String),
+
     #[error("Unsupported image format: {0}")]
     #[allow(dead_code)]
     UnsupportedFormat(String),
@@ -42,6 +45,9 @@ impl IntoResponse for OcrError {
         let (status, code) = match &self {
             OcrError::InitializationError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INIT_ERROR"),
             OcrError::ProcessingError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "PROCESSING_ERROR"),
+            OcrError::PreprocessingError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "PREPROCESSING_ERROR")
+            }
             OcrError::UnsupportedFormat(_) => (StatusCode::BAD_REQUEST, "UNSUPPORTED_FORMAT"),
             OcrError::ImageTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "IMAGE_TOO_LARGE"),
             OcrError::MissingFile => (StatusCode::BAD_REQUEST, "MISSING_FILE"),

@@ -44,6 +44,8 @@ module ActiveStorage
       #
       # * +blob+ - An ActiveStorage::Blob instance
       # * +engine+ - OCR engine to use (:ocrs or :leptess). Defaults to configured engine.
+      # * +preprocess+ - Preprocessing preset (:none, :minimal, :default, :aggressive).
+      #                  Defaults to configured preset.
       #
       # ==== Returns
       #
@@ -53,9 +55,9 @@ module ActiveStorage
       #
       # * ConnectionError - if the server is unreachable
       # * ServerError - if the server returns an error
-      def extract_text(blob, engine: nil)
+      def extract_text(blob, engine: nil, preprocess: nil)
         blob.open do |file|
-          extract_text_from_file(file, blob.content_type, blob.filename.to_s, engine: engine)
+          extract_text_from_file(file, blob.content_type, blob.filename.to_s, engine: engine, preprocess: preprocess)
         end
       end
 
@@ -67,6 +69,8 @@ module ActiveStorage
       # * +content_type+ - MIME type (auto-detected if not provided)
       # * +filename+ - Filename to send (defaults to basename of path)
       # * +engine+ - OCR engine to use (:ocrs or :leptess). Defaults to configured engine.
+      # * +preprocess+ - Preprocessing preset (:none, :minimal, :default, :aggressive).
+      #                  Defaults to configured preset.
       #
       # ==== Returns
       #
@@ -76,12 +80,12 @@ module ActiveStorage
       #
       # * ConnectionError - if the server is unreachable
       # * ServerError - if the server returns an error
-      def extract_text_from_path(path, content_type: nil, filename: nil, engine: nil)
+      def extract_text_from_path(path, content_type: nil, filename: nil, engine: nil, preprocess: nil)
         content_type ||= Marcel::MimeType.for(Pathname.new(path))
         filename ||= File.basename(path)
 
         File.open(path, "rb") do |file|
-          extract_text_from_file(file, content_type, filename, engine: engine)
+          extract_text_from_file(file, content_type, filename, engine: engine, preprocess: preprocess)
         end
       end
 
@@ -95,6 +99,8 @@ module ActiveStorage
       # * +content_type+ - MIME type of the file
       # * +filename+ - Filename to send to the server
       # * +engine+ - OCR engine to use (:ocrs or :leptess). Defaults to configured engine.
+      # * +preprocess+ - Preprocessing preset (:none, :minimal, :default, :aggressive).
+      #                  Defaults to configured preset.
       #
       # ==== Returns
       #
@@ -104,9 +110,10 @@ module ActiveStorage
       #
       # * ConnectionError - if the server is unreachable
       # * ServerError - if the server returns an error
-      def extract_text_from_file(file, content_type, filename, engine: nil)
+      def extract_text_from_file(file, content_type, filename, engine: nil, preprocess: nil)
         target_engine = engine || @config.engine
-        endpoint = ocr_endpoint_for(target_engine)
+        target_preprocess = preprocess || @config.preprocess
+        endpoint = ocr_endpoint_for(target_engine, target_preprocess)
 
         response = connection.post(endpoint) do |req|
           req.body = {
@@ -206,24 +213,27 @@ module ActiveStorage
 
       private
 
-      # Returns the OCR endpoint path for the given engine.
+      # Returns the OCR endpoint path for the given engine and preprocess preset.
       #
       # ==== Parameters
       #
       # * +engine+ - Engine name (:ocrs or :leptess)
+      # * +preprocess+ - Preprocessing preset (:none, :minimal, :default, :aggressive)
       #
       # ==== Returns
       #
-      # The endpoint path string (e.g., "/ocr" or "/ocr/leptess")
-      def ocr_endpoint_for(engine)
-        case engine.to_sym
-        when :ocrs
-          "/ocr"
-        when :leptess
-          "/ocr/leptess"
-        else
-          raise ArgumentError, "Unknown engine: #{engine}"
-        end
+      # The endpoint path string with query parameter (e.g., "/ocr?preprocess=default")
+      def ocr_endpoint_for(engine, preprocess)
+        base = case engine.to_sym
+               when :ocrs
+                 "/ocr"
+               when :leptess
+                 "/ocr/leptess"
+               else
+                 raise ArgumentError, "Unknown engine: #{engine}"
+               end
+
+        "#{base}?preprocess=#{preprocess}"
       end
 
       # Returns the Faraday connection, creating it if necessary.
@@ -250,7 +260,8 @@ module ActiveStorage
           confidence: data[:confidence],
           processing_time_ms: data[:processing_time_ms],
           warnings: data[:warnings] || [],
-          engine: data[:engine]
+          engine: data[:engine],
+          preprocessing: data[:preprocessing]
         )
       end
     end

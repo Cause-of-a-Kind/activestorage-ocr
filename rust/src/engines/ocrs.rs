@@ -62,7 +62,7 @@ impl OcrsEngine {
     }
 
     /// Process an image file and return the extracted text
-    fn process_image(&self, path: &Path) -> Result<OcrResult, OcrError> {
+    fn process_image_file(&self, path: &Path) -> Result<OcrResult, OcrError> {
         let warnings = Vec::new();
 
         // Load the image using the image crate
@@ -248,7 +248,11 @@ impl OcrEngine for OcrsEngine {
             return self.process_pdf(path);
         }
 
-        self.process_image(path)
+        self.process_image_file(path)
+    }
+
+    fn process_image(&self, image: &DynamicImage) -> Result<OcrResult, OcrError> {
+        self.process_dynamic_image(image)
     }
 
     fn supported_formats(&self) -> Vec<String> {
