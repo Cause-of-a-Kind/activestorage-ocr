@@ -1,4 +1,5 @@
 use crate::error::OcrError;
+use image::DynamicImage;
 use std::path::Path;
 
 /// OCR processing result
@@ -19,6 +20,9 @@ pub trait OcrEngine: Send + Sync {
 
     /// Process a file (image or PDF) and return the extracted text
     fn process(&self, path: &Path) -> Result<OcrResult, OcrError>;
+
+    /// Process a DynamicImage directly (for preprocessed images)
+    fn process_image(&self, image: &DynamicImage) -> Result<OcrResult, OcrError>;
 
     /// Get supported MIME types
     fn supported_formats(&self) -> Vec<String>;

@@ -10,6 +10,7 @@ module ActiveStorage
     #     config.server_url = "http://localhost:9292"
     #     config.timeout = 60
     #     config.engine = :leptess  # Use Tesseract engine instead of default ocrs
+    #     config.preprocess = :aggressive  # Use aggressive preprocessing
     #   end
     #
     # == Environment Variables
@@ -18,10 +19,14 @@ module ActiveStorage
     # * +ACTIVESTORAGE_OCR_TIMEOUT+ - Request timeout in seconds (default: 30)
     # * +ACTIVESTORAGE_OCR_OPEN_TIMEOUT+ - Connection timeout in seconds (default: 5)
     # * +ACTIVESTORAGE_OCR_ENGINE+ - OCR engine to use: ocrs (default) or leptess
+    # * +ACTIVESTORAGE_OCR_PREPROCESS+ - Preprocessing preset: none, minimal, default, aggressive
     #
     class Configuration
       # Valid OCR engine names
       VALID_ENGINES = %i[ocrs leptess].freeze
+
+      # Valid preprocessing preset names
+      VALID_PREPROCESS = %i[none minimal default aggressive].freeze
 
       # The URL of the OCR server.
       attr_accessor :server_url
@@ -40,6 +45,11 @@ module ActiveStorage
       # Use :leptess for Tesseract-based OCR (better for messy images).
       attr_reader :engine
 
+      # The preprocessing preset to use (:none, :minimal, :default, :aggressive).
+      # Default is :default.
+      # Use :none to skip preprocessing, :aggressive for poor quality images.
+      attr_reader :preprocess
+
       # Creates a new Configuration with default values.
       #
       # Defaults are read from environment variables if set.
@@ -49,6 +59,7 @@ module ActiveStorage
         @open_timeout = ENV.fetch("ACTIVESTORAGE_OCR_OPEN_TIMEOUT", 5).to_i
         @content_types = default_content_types
         self.engine = ENV.fetch("ACTIVESTORAGE_OCR_ENGINE", "ocrs").to_sym
+        self.preprocess = ENV.fetch("ACTIVESTORAGE_OCR_PREPROCESS", "default").to_sym
       end
 
       # Set the OCR engine to use.
@@ -67,6 +78,25 @@ module ActiveStorage
         end
 
         @engine = value
+      end
+
+      # Set the preprocessing preset to use.
+      #
+      # ==== Parameters
+      #
+      # * +value+ - Preset name (:none, :minimal, :default, :aggressive)
+      #
+      # ==== Raises
+      #
+      # * +ArgumentError+ if an invalid preset name is provided
+      def preprocess=(value)
+        value = value.to_sym
+        unless VALID_PREPROCESS.include?(value)
+          raise ArgumentError,
+                "Invalid preprocess preset: #{value}. Valid presets: #{VALID_PREPROCESS.join(', ')}"
+        end
+
+        @preprocess = value
       end
 
       # Returns the default list of supported content types.

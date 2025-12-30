@@ -67,7 +67,7 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
   end
 
   def test_extract_text_from_file_returns_result_on_success
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 200, body: @success_response.to_json)
 
     file = StringIO.new("fake image data")
@@ -79,7 +79,7 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
   end
 
   def test_extract_text_from_file_raises_server_error_on_failure
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 500, body: { error: "Processing failed" }.to_json)
 
     file = StringIO.new("fake image data")
@@ -91,7 +91,7 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
   end
 
   def test_extract_text_from_file_raises_connection_error_when_unreachable
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_raise(Faraday::ConnectionFailed)
 
     file = StringIO.new("fake image data")
@@ -104,23 +104,23 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
   # Engine selection tests
 
   def test_extract_text_from_file_uses_default_ocrs_endpoint
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 200, body: @success_response.to_json)
 
     file = StringIO.new("fake image data")
     @client.extract_text_from_file(file, "image/png", "test.png")
 
-    assert_requested(:post, "#{@server_url}/ocr")
+    assert_requested(:post, "#{@server_url}/ocr?preprocess=default")
   end
 
   def test_extract_text_from_file_uses_leptess_endpoint_when_specified
-    stub_request(:post, "#{@server_url}/ocr/leptess")
+    stub_request(:post, "#{@server_url}/ocr/leptess?preprocess=default")
       .to_return(status: 200, body: @success_response.to_json)
 
     file = StringIO.new("fake image data")
     @client.extract_text_from_file(file, "image/png", "test.png", engine: :leptess)
 
-    assert_requested(:post, "#{@server_url}/ocr/leptess")
+    assert_requested(:post, "#{@server_url}/ocr/leptess?preprocess=default")
   end
 
   def test_extract_text_from_file_uses_configured_engine
@@ -128,14 +128,14 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
       config.engine = :leptess
     end
 
-    stub_request(:post, "#{@server_url}/ocr/leptess")
+    stub_request(:post, "#{@server_url}/ocr/leptess?preprocess=default")
       .to_return(status: 200, body: @success_response.to_json)
 
     client = ActiveStorage::Ocr::Client.new
     file = StringIO.new("fake image data")
     client.extract_text_from_file(file, "image/png", "test.png")
 
-    assert_requested(:post, "#{@server_url}/ocr/leptess")
+    assert_requested(:post, "#{@server_url}/ocr/leptess?preprocess=default")
   end
 
   def test_extract_text_from_file_per_request_engine_overrides_config
@@ -143,14 +143,14 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
       config.engine = :leptess
     end
 
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 200, body: @success_response.to_json)
 
     client = ActiveStorage::Ocr::Client.new
     file = StringIO.new("fake image data")
     client.extract_text_from_file(file, "image/png", "test.png", engine: :ocrs)
 
-    assert_requested(:post, "#{@server_url}/ocr")
+    assert_requested(:post, "#{@server_url}/ocr?preprocess=default")
   end
 
   def test_extract_text_from_file_raises_on_invalid_engine
@@ -163,7 +163,7 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
 
   def test_extract_text_from_file_returns_engine_in_result
     response_with_engine = @success_response.merge(engine: "ocrs")
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 200, body: response_with_engine.to_json)
 
     file = StringIO.new("fake image data")
@@ -172,12 +172,39 @@ class ActiveStorage::Ocr::ClientTest < ActiveStorage::Ocr::TestCase
     assert_equal "ocrs", result.engine
   end
 
+  # Preprocessing tests
+
+  def test_extract_text_from_file_uses_configured_preprocess
+    ActiveStorage::Ocr.configure do |config|
+      config.preprocess = :aggressive
+    end
+
+    stub_request(:post, "#{@server_url}/ocr?preprocess=aggressive")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    client = ActiveStorage::Ocr::Client.new
+    file = StringIO.new("fake image data")
+    client.extract_text_from_file(file, "image/png", "test.png")
+
+    assert_requested(:post, "#{@server_url}/ocr?preprocess=aggressive")
+  end
+
+  def test_extract_text_from_file_per_request_preprocess_overrides_config
+    stub_request(:post, "#{@server_url}/ocr?preprocess=none")
+      .to_return(status: 200, body: @success_response.to_json)
+
+    file = StringIO.new("fake image data")
+    @client.extract_text_from_file(file, "image/png", "test.png", preprocess: :none)
+
+    assert_requested(:post, "#{@server_url}/ocr?preprocess=none")
+  end
+
   # Compare tests
 
   def test_compare_from_path_calls_both_engines
-    stub_request(:post, "#{@server_url}/ocr")
+    stub_request(:post, "#{@server_url}/ocr?preprocess=default")
       .to_return(status: 200, body: @success_response.merge(engine: "ocrs").to_json)
-    stub_request(:post, "#{@server_url}/ocr/leptess")
+    stub_request(:post, "#{@server_url}/ocr/leptess?preprocess=default")
       .to_return(status: 200, body: @success_response.merge(engine: "leptess").to_json)
 
     # Create a temporary file for the test

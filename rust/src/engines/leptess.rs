@@ -7,6 +7,7 @@
 use crate::config::Config;
 use crate::engine::{OcrEngine, OcrResult};
 use crate::error::OcrError;
+use image::DynamicImage;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -50,7 +51,7 @@ impl LeptessEngine {
     }
 
     /// Process an image file
-    fn process_image(&self, path: &Path) -> Result<OcrResult, OcrError> {
+    fn process_image_file(&self, path: &Path) -> Result<OcrResult, OcrError> {
         // Load image using the image crate
         let img = image::open(path)
             .map_err(|e| OcrError::ProcessingError(format!("Failed to load image: {}", e)))?;
@@ -204,7 +205,11 @@ impl OcrEngine for LeptessEngine {
             return self.process_pdf(path);
         }
 
-        self.process_image(path)
+        self.process_image_file(path)
+    }
+
+    fn process_image(&self, image: &DynamicImage) -> Result<OcrResult, OcrError> {
+        self.process_dynamic_image(image)
     }
 
     fn supported_formats(&self) -> Vec<String> {
